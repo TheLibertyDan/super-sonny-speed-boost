@@ -1,0 +1,2692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Super Sonny Speed Boost</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+    font-family: -apple-system, Arial, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  canvas {
+    display: block;
+    background: #222;
+    box-shadow: 0 0 40px rgba(255, 102, 0, 0.5);
+    border-radius: 6px;
+    touch-action: none;
+  }
+  #nameInput {
+    position: fixed;
+    left: 50%;
+    top: 45%;
+    transform: translate(-50%, -50%);
+    padding: 12px 16px;
+    font: bold 28px monospace;
+    color: #FFF;
+    background: #111;
+    border: 3px solid #FF6A00;
+    border-radius: 8px;
+    outline: none;
+    text-transform: uppercase;
+    width: 260px;
+    text-align: center;
+    letter-spacing: 2px;
+    display: none;
+    z-index: 10;
+    caret-color: #00E5C7;
+  }
+</style>
+</head>
+<body>
+<canvas id="game" width="500" height="720"></canvas>
+<input id="nameInput" maxlength="10" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="characters">
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const nameInput = document.getElementById('nameInput');
+const W = canvas.width;
+const H = canvas.height;
+const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
+// Scale canvas responsively for mobile
+function resizeCanvas() {
+  const scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+  canvas.style.width = Math.floor(W * scale) + 'px';
+  canvas.style.height = Math.floor(H * scale) + 'px';
+}
+window.addEventListener('resize', resizeCanvas);
+window.addEventListener('orientationchange', () => setTimeout(resizeCanvas, 150));
+resizeCanvas();
+
+// Touch state — one finger steers, additional touches shoot
+let steerTouchId = null;
+let steerTargetX = null;
+
+function eventToCanvas(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (clientX - rect.left) * (canvas.width / rect.width),
+    y: (clientY - rect.top)  * (canvas.height / rect.height)
+  };
+}
+
+function pauseButtonHit(pos) {
+  return pos.x > W - 52 && pos.x < W && pos.y > 0 && pos.y < 48;
+}
+function togglePause() {
+  if (state === 'playing') state = 'paused';
+  else if (state === 'paused') state = 'playing';
+}
+
+const TRACK_ORANGE = '#FF6A00';
+const TRACK_RAIL = '#0052B4';
+const CAR_COLORS = ['#00B4FF', '#FFD400', '#00CC44', '#B833FF', '#FF33AA', '#00E5C7', '#FFFFFF', '#FF6600'];
+const REX_BLUE = '#3E7ED4';
+const CODY_ORANGE = '#FF9F1F';
+
+const STARTING_AMMO = 10;
+const AMMO_PER_PICKUP = 6;
+const SHOOT_COOLDOWN = 8;
+
+const VADER_FIRST_AT = 300;
+const VADER_REPEAT_GAP = 1200;
+const VADER_HP = 5;
+const VADER_SABER_LEN = 62;
+const INQUISITOR_HP = 2;
+const INQUISITOR_SABER_LEN = 52;
+const STORMTROOPER_HP = 1;
+const STORMTROOPER_SHOOT_MIN = 70;
+const STORMTROOPER_SHOOT_JITTER = 60;
+const SABER_ROT = 0.025;
+const BOSS_DESCENT = 0.22;
+const SABER_HIT_R = 12;
+
+const LIGHTSPEED_MILES = 500;
+const LIGHTSPEED_PER_FRAME = 4;
+
+const TROOPER_AMMO = 12;
+const TROOPER_COOLDOWN = 44;
+const REX_AMMO = 48;
+const REX_COOLDOWN = 22;
+const CODY_AMMO = 6;
+const CODY_COOLDOWN = 55;
+const WINGMAN_SLOTS = [-70, 70, -140, 140];
+
+const DETONATOR_TIMER = 100;
+const DETONATOR_GRAVITY = 0.20;
+const DETONATOR_INIT_VY = -15;
+const DETONATOR_RADIUS = 62;
+
+const MEDIC_SLOTS = [
+  { dx: -50, dy: 58 },
+  { dx: 50,  dy: 58 },
+  { dx: 0,   dy: 82 }
+];
+const REVIVE_INVINCIBLE_FRAMES = 90;
+
+let state = 'menu';
+let crashCause = 'car';
+let score = 0;
+let bestScore = Number(localStorage.getItem('sonnyBest') || 0);
+
+// Leaderboard — persisted top scores with names
+const LEADERBOARD_SIZE = 8;
+let leaderboard = [];
+try { leaderboard = JSON.parse(localStorage.getItem('sonnyLeaderboard') || '[]'); }
+catch (e) { leaderboard = []; }
+let enteringName = false;
+let entryName = '';
+let entryScore = 0;
+let lastAddedRank = -1;
+
+function checkLeaderboardQualifies(s) {
+  if (s <= 0) return false;
+  if (leaderboard.length < LEADERBOARD_SIZE) return true;
+  return s > leaderboard[leaderboard.length - 1].score;
+}
+function commitLeaderboardEntry() {
+  const raw = (nameInput.value || entryName).trim();
+  const name = (raw || 'PLAYER').slice(0, 10).toUpperCase();
+  const entry = { name, score: entryScore };
+  leaderboard.push(entry);
+  leaderboard.sort((a, b) => b.score - a.score);
+  leaderboard = leaderboard.slice(0, LEADERBOARD_SIZE);
+  lastAddedRank = leaderboard.indexOf(entry);
+  try { localStorage.setItem('sonnyLeaderboard', JSON.stringify(leaderboard)); }
+  catch (e) {}
+  hideNameEntry();
+}
+function showNameEntry() {
+  enteringName = true;
+  entryName = '';
+  lastAddedRank = -1;
+  nameInput.value = '';
+  nameInput.style.display = 'block';
+  // Delay focus so mobile keyboards don't fight the initial touch
+  setTimeout(() => nameInput.focus(), 120);
+}
+function hideNameEntry() {
+  enteringName = false;
+  entryName = '';
+  nameInput.value = '';
+  nameInput.blur();
+  nameInput.style.display = 'none';
+}
+// Player wants to jump straight into a new run — throw away the entry
+function skipNameEntry() {
+  hideNameEntry();
+  startGame();
+}
+// Sync entryName as the user types (used for canvas overlays)
+nameInput.addEventListener('input', () => {
+  entryName = nameInput.value.toUpperCase().slice(0, 10);
+  nameInput.value = entryName;
+});
+nameInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); commitLeaderboardEntry(); return; }
+  if (e.key === 'Escape' || e.key === 'Esc') { e.preventDefault(); skipNameEntry(); return; }
+  // Arrow keys must NOT skip anymore — stop them dead so they can't bubble to window
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+    e.stopPropagation();
+  }
+});
+let speed = 5;
+let scrollY = 0;
+let flashTimer = 0;
+
+let vaderAlertTimer = 0;
+let lightspeedAlertTimer = 0;
+let rexAlertTimer = 0;
+let codyAlertTimer = 0;
+let kixAlertTimer = 0;
+let trooperAlertTimer = 0;
+let reviveInvincible = 0;
+
+// Revive cinematic
+let reviveStage = 0;       // 0 = CRASH!, 1 = Kix flies in, 2 = ALL BETTER!
+let reviveStageTimer = 0;
+let reviveMedic = null;    // the Kix that flies to the player
+let reviveCause = 'car';   // what would have killed us (for the CRASH sign)
+
+const player = {
+  x: W / 2,
+  y: H - 130,
+  width: 54,
+  height: 96,
+  color: '#E30613',
+  ammo: STARTING_AMMO,
+  shootCooldown: 0
+};
+
+let cars = [];
+let bolts = [];
+let ammoPickups = [];
+let portals = [];
+let rexPickups = [];
+let codyPickups = [];
+let kixPickups = [];
+let trooperPickups = [];
+let particles = [];
+let bosses = [];
+let wingmen = [];
+let medics = [];
+let lightspeedMilesLeft = 0;
+
+let vaderNextAt = VADER_FIRST_AT;
+let waveActive = false;
+let bossWave = 0;
+let spawnCooldown = 0;
+let ammoSpawnTimer = 180;
+let portalTimer = 700;
+let rexPickupTimer = 500;
+let codyPickupTimer = 700;
+let kixPickupTimer = 1000;
+let trooperPickupTimer = 400;
+
+const keys = {};
+
+// -------------------- Audio --------------------
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+function tone(type, f1, f2, dur, gain) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(f1, t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(f2, 1), t + dur);
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(t);
+  o.stop(t + dur + 0.02);
+}
+function playLaser()        { tone('sawtooth', 880, 110, 0.15, 0.12); }
+function playRexBlast()     { tone('triangle', 1200, 200, 0.10, 0.08); }
+function playTrooperBlast() { tone('triangle', 900, 250, 0.10, 0.07); }
+function playEnemyBlast()   { tone('sawtooth', 700, 180, 0.12, 0.10); }
+function playDetonatorThrow(){ tone('triangle', 400, 200, 0.20, 0.08); }
+function playPickup()       { tone('sine', 660, 1320, 0.15, 0.2); }
+function playEmpty()        { tone('square', 180, 180, 0.08, 0.06); }
+function playSaberClash()   { tone('square', 1400, 500, 0.13, 0.18); }
+function playPortal()       { tone('sine', 220, 1760, 0.5, 0.15); }
+function playBoom() {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const size = Math.floor(audioCtx.sampleRate * 0.3);
+  const buf = audioCtx.createBuffer(1, size, audioCtx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < size; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / size);
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = buf;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0.35, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+  noise.connect(g).connect(audioCtx.destination);
+  noise.start(t);
+}
+function playAlarm() {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  for (let i = 0; i < 3; i++) {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'square';
+    o.frequency.setValueAtTime(500, t + i * 0.13);
+    g.gain.setValueAtTime(0.11, t + i * 0.13);
+    g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.13 + 0.09);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(t + i * 0.13);
+    o.stop(t + i * 0.13 + 0.1);
+  }
+}
+function playImperialMarch() {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  const G = 196, Eb = 155, Bb = 233;
+  const notes = [
+    { f: G,  start: 0.00, dur: 0.28 },
+    { f: G,  start: 0.32, dur: 0.28 },
+    { f: G,  start: 0.64, dur: 0.28 },
+    { f: Eb, start: 0.96, dur: 0.22 },
+    { f: Bb, start: 1.18, dur: 0.10 },
+    { f: G,  start: 1.30, dur: 0.28 },
+    { f: Eb, start: 1.62, dur: 0.22 },
+    { f: Bb, start: 1.84, dur: 0.10 },
+    { f: G,  start: 1.96, dur: 0.60 }
+  ];
+  for (const n of notes) {
+    const o1 = audioCtx.createOscillator();
+    const g1 = audioCtx.createGain();
+    o1.type = 'sawtooth';
+    o1.frequency.setValueAtTime(n.f, t0 + n.start);
+    g1.gain.setValueAtTime(0, t0 + n.start);
+    g1.gain.linearRampToValueAtTime(0.18, t0 + n.start + 0.02);
+    g1.gain.linearRampToValueAtTime(0.001, t0 + n.start + n.dur);
+    o1.connect(g1).connect(audioCtx.destination);
+    o1.start(t0 + n.start);
+    o1.stop(t0 + n.start + n.dur + 0.02);
+    const o2 = audioCtx.createOscillator();
+    const g2 = audioCtx.createGain();
+    o2.type = 'square';
+    o2.frequency.setValueAtTime(n.f * 2, t0 + n.start);
+    g2.gain.setValueAtTime(0, t0 + n.start);
+    g2.gain.linearRampToValueAtTime(0.05, t0 + n.start + 0.02);
+    g2.gain.linearRampToValueAtTime(0.001, t0 + n.start + n.dur);
+    o2.connect(g2).connect(audioCtx.destination);
+    o2.start(t0 + n.start);
+    o2.stop(t0 + n.start + n.dur + 0.02);
+  }
+}
+function playRexArrival() {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const freqs = [523, 659, 784];
+  freqs.forEach((f, i) => {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'square';
+    o.frequency.setValueAtTime(f, t + i * 0.09);
+    g.gain.setValueAtTime(0.15, t + i * 0.09);
+    g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.09 + 0.15);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(t + i * 0.09);
+    o.stop(t + i * 0.09 + 0.17);
+  });
+}
+function playMedpack() {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const freqs = [660, 880, 1100, 1320];
+  freqs.forEach((f, i) => {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(f, t + i * 0.06);
+    g.gain.setValueAtTime(0.16, t + i * 0.06);
+    g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.06 + 0.16);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(t + i * 0.06);
+    o.stop(t + i * 0.06 + 0.18);
+  });
+}
+function playKixArrival() {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const freqs = [523, 784];
+  freqs.forEach((f, i) => {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(f, t + i * 0.08);
+    g.gain.setValueAtTime(0.12, t + i * 0.08);
+    g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.14);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(t + i * 0.08);
+    o.stop(t + i * 0.08 + 0.16);
+  });
+}
+function playCodyArrival() {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const freqs = [440, 554, 659, 880];
+  freqs.forEach((f, i) => {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'square';
+    o.frequency.setValueAtTime(f, t + i * 0.08);
+    g.gain.setValueAtTime(0.14, t + i * 0.08);
+    g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.14);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(t + i * 0.08);
+    o.stop(t + i * 0.08 + 0.16);
+  });
+}
+function playTrooperArrival() {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const freqs = [440, 587];
+  freqs.forEach((f, i) => {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'square';
+    o.frequency.setValueAtTime(f, t + i * 0.07);
+    g.gain.setValueAtTime(0.10, t + i * 0.07);
+    g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.07 + 0.10);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(t + i * 0.07);
+    o.stop(t + i * 0.07 + 0.12);
+  });
+}
+
+// -------------------- Input --------------------
+window.addEventListener('keydown', e => {
+  ensureAudio();
+
+  // Fallback: if the input somehow loses focus, ESC still skips the entry
+  if (enteringName && (e.key === 'Escape' || e.key === 'Esc')) {
+    e.preventDefault();
+    skipNameEntry();
+    return;
+  }
+  // Otherwise the HTML input handles typing/Enter — don't let keys leak into gameplay
+  if (enteringName) return;
+
+  keys[e.key] = true;
+  if (e.key === 'Escape' || e.key === 'Esc') {
+    if (state === 'playing') { state = 'paused'; return; }
+    if (state === 'paused')  { state = 'playing'; return; }
+  }
+  if (state === 'menu' || state === 'crashed') {
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' ', 'Enter'].includes(e.key)) startGame();
+  } else if (state === 'playing') {
+    if (e.key === ' ') shoot();
+  }
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(e.key)) e.preventDefault();
+});
+window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+// -------------------- Touch input --------------------
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  ensureAudio();
+
+  for (const touch of e.changedTouches) {
+    const pos = eventToCanvas(touch.clientX, touch.clientY);
+
+    // Pause / resume / skip buttons win regardless of context
+    if (pauseButtonHit(pos) && (state === 'playing' || state === 'paused')) {
+      togglePause();
+      continue;
+    }
+    if (resumeButtonHit(pos)) { state = 'playing'; continue; }
+    if (skipButtonHit(pos)) { skipNameEntry(); continue; }
+
+    // Name entry: outside the input, tapping means "skip"
+    if (enteringName) { skipNameEntry(); continue; }
+
+    // Menu / crashed: tap starts a new run
+    if (state === 'menu' || state === 'crashed') { startGame(); continue; }
+
+    // Paused (no button hit): tap anywhere resumes too
+    if (state === 'paused') { state = 'playing'; continue; }
+
+    // Playing: first finger steers, subsequent taps shoot
+    if (state === 'playing') {
+      if (steerTouchId === null) {
+        steerTouchId = touch.identifier;
+        steerTargetX = pos.x;
+      } else {
+        shoot();
+      }
+    }
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const touch of e.changedTouches) {
+    if (touch.identifier === steerTouchId) {
+      steerTargetX = eventToCanvas(touch.clientX, touch.clientY).x;
+    }
+  }
+}, { passive: false });
+
+function endTouch(e) {
+  e.preventDefault();
+  for (const touch of e.changedTouches) {
+    if (touch.identifier === steerTouchId) {
+      steerTouchId = null;
+      steerTargetX = null;
+    }
+  }
+}
+canvas.addEventListener('touchend', endTouch, { passive: false });
+canvas.addEventListener('touchcancel', endTouch, { passive: false });
+
+// Desktop mouse — pause / resume / skip button clicks
+canvas.addEventListener('click', e => {
+  const pos = eventToCanvas(e.clientX, e.clientY);
+  if (pauseButtonHit(pos) && (state === 'playing' || state === 'paused')) {
+    togglePause();
+    return;
+  }
+  if (resumeButtonHit(pos)) { state = 'playing'; return; }
+  if (skipButtonHit(pos)) { skipNameEntry(); return; }
+});
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+function startGame() {
+  // Hard safety net: never blow away a pending high-score entry
+  if (enteringName) return;
+  steerTouchId = null;
+  steerTargetX = null;
+  state = 'playing';
+  crashCause = 'car';
+  score = 0;
+  speed = 5;
+  player.x = W / 2;
+  player.ammo = STARTING_AMMO;
+  player.shootCooldown = 0;
+  cars = [];
+  bolts = [];
+  ammoPickups = [];
+  portals = [];
+  rexPickups = [];
+  codyPickups = [];
+  kixPickups = [];
+  trooperPickups = [];
+  particles = [];
+  bosses = [];
+  wingmen = [];
+  medics = [];
+  lightspeedMilesLeft = 0;
+  vaderNextAt = VADER_FIRST_AT;
+  waveActive = false;
+  bossWave = 0;
+  spawnCooldown = 20;
+  ammoSpawnTimer = 180;
+  portalTimer = 700;
+  rexPickupTimer = 500;
+  codyPickupTimer = 700;
+  kixPickupTimer = 1000;
+  trooperPickupTimer = 400;
+  flashTimer = 0;
+  vaderAlertTimer = 0;
+  lightspeedAlertTimer = 0;
+  rexAlertTimer = 0;
+  codyAlertTimer = 0;
+  kixAlertTimer = 0;
+  reviveInvincible = 0;
+  reviveStage = 0;
+  reviveStageTimer = 0;
+  reviveMedic = null;
+  reviveCause = 'car';
+  trooperAlertTimer = 0;
+}
+
+function shoot() {
+  if (player.shootCooldown > 0) return;
+  if (player.ammo <= 0) { playEmpty(); return; }
+  player.ammo--;
+  player.shootCooldown = SHOOT_COOLDOWN;
+  bolts.push({
+    x: player.x, y: player.y - player.height / 2 - 4,
+    vx: 0, vy: -16, hostile: false, blue: false
+  });
+  playLaser();
+}
+
+// -------------------- Geometry --------------------
+function pointSegDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+// -------------------- Draw helpers --------------------
+function roundRect(x, y, w, h, r, fill) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+  if (fill) ctx.fill();
+}
+
+function drawCar(x, y, w, h, color) {
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  roundRect(x - w / 2 + 5, y - h / 2 + 6, w, h, 10, true);
+  ctx.fillStyle = color;
+  roundRect(x - w / 2, y - h / 2, w, h, 10, true);
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  roundRect(x - w / 2 + 6, y - h / 2 + 22, w - 12, h - 44, 6, true);
+  ctx.fillStyle = '#9BE1FF';
+  roundRect(x - w / 2 + 8, y - h / 2 + 16, w - 16, 18, 4, true);
+  ctx.fillStyle = '#7DD0F5';
+  roundRect(x - w / 2 + 8, y + h / 2 - 30, w - 16, 14, 4, true);
+  ctx.fillStyle = '#111';
+  roundRect(x - w / 2 - 4, y - h / 2 + 10, 8, 22, 3, true);
+  roundRect(x + w / 2 - 4, y - h / 2 + 10, 8, 22, 3, true);
+  roundRect(x - w / 2 - 4, y + h / 2 - 32, 8, 22, 3, true);
+  roundRect(x + w / 2 - 4, y + h / 2 - 32, 8, 22, 3, true);
+  ctx.fillStyle = '#FFF9A8';
+  ctx.fillRect(x - w / 2 + 8, y - h / 2 + 2, 10, 5);
+  ctx.fillRect(x + w / 2 - 18, y - h / 2 + 2, 10, 5);
+}
+
+// Hot Wheels "Rodger Dodger" style — muscle car with big supercharger on the hood
+function drawPlayerCar(x, y, w, h, color) {
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  roundRect(x - w / 2 + 5, y - h / 2 + 6, w, h, 10, true);
+
+  // Muscle body — flared rear fenders, narrower front
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x - w / 2 + 8, y - h / 2);
+  ctx.lineTo(x + w / 2 - 8, y - h / 2);
+  ctx.quadraticCurveTo(x + w / 2 + 6, y - h / 2 + 26, x + w / 2 + 6, y);
+  ctx.lineTo(x + w / 2 + 6, y + h / 2 - 8);
+  ctx.quadraticCurveTo(x + w / 2 + 6, y + h / 2, x + w / 2 - 2, y + h / 2);
+  ctx.lineTo(x - w / 2 + 2, y + h / 2);
+  ctx.quadraticCurveTo(x - w / 2 - 6, y + h / 2, x - w / 2 - 6, y + h / 2 - 8);
+  ctx.lineTo(x - w / 2 - 6, y);
+  ctx.quadraticCurveTo(x - w / 2 - 6, y - h / 2 + 26, x - w / 2 + 8, y - h / 2);
+  ctx.closePath();
+  ctx.fill();
+
+  // Hood shadow behind supercharger
+  ctx.fillStyle = 'rgba(0,0,0,0.14)';
+  roundRect(x - w / 2 + 10, y - h / 2 + 4, w - 20, 22, 4, true);
+
+  // Racing stripes down the middle
+  ctx.fillStyle = '#FFF';
+  ctx.fillRect(x - 11, y - h / 2 + 2, 4, h - 8);
+  ctx.fillRect(x + 7, y - h / 2 + 2, 4, h - 8);
+
+  // Cabin / windshield
+  ctx.fillStyle = '#9BE1FF';
+  roundRect(x - w / 2 + 12, y - h / 2 + 30, w - 24, 14, 4, true);
+  // Rear window
+  ctx.fillStyle = '#7DD0F5';
+  roundRect(x - w / 2 + 12, y + h / 2 - 22, w - 24, 10, 3, true);
+
+  // Door panel line
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x - w / 2 + 4, y + h / 2 - 26);
+  ctx.lineTo(x + w / 2 - 4, y + h / 2 - 26);
+  ctx.stroke();
+
+  // ---- SUPERCHARGER on the hood (Rodger Dodger's signature) ----
+  const scY = y - h / 2 + 14;
+  // Base mounting plate
+  ctx.fillStyle = '#1a1a1a';
+  roundRect(x - 15, scY - 2, 30, 10, 2, true);
+  // Chrome blower body
+  ctx.fillStyle = '#C8C8C8';
+  roundRect(x - 13, scY - 12, 26, 14, 3, true);
+  // Belt/pulley detail lines
+  ctx.fillStyle = '#7a7a7a';
+  ctx.fillRect(x - 13, scY - 6, 26, 2);
+  ctx.fillRect(x - 13, scY - 2, 26, 2);
+  // Chrome highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.fillRect(x - 11, scY - 10, 6, 2);
+  // Air scoop opening on top (velocity stacks / carbs)
+  ctx.fillStyle = '#000';
+  roundRect(x - 9, scY - 16, 18, 6, 2, true);
+  ctx.strokeStyle = '#555';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x - 9, scY - 16, 18, 6);
+  ctx.fillStyle = '#333';
+  ctx.fillRect(x - 3, scY - 16, 1, 6); // center divider
+
+  // Headlights either side of the blower
+  ctx.fillStyle = '#FFF9A8';
+  roundRect(x - w / 2 + 4, y - h / 2 + 3, 8, 5, 1, true);
+  roundRect(x + w / 2 - 12, y - h / 2 + 3, 8, 5, 1, true);
+
+  // ---- Wheels ----
+  // Rear (bigger, wider)
+  ctx.fillStyle = '#111';
+  roundRect(x - w / 2 - 8, y + h / 2 - 34, 12, 28, 4, true);
+  roundRect(x + w / 2 - 4, y + h / 2 - 34, 12, 28, 4, true);
+  // Rear hubcaps
+  ctx.fillStyle = '#999';
+  ctx.beginPath();
+  ctx.arc(x - w / 2 - 2, y + h / 2 - 20, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x + w / 2 + 2, y + h / 2 - 20, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Front (smaller)
+  ctx.fillStyle = '#111';
+  roundRect(x - w / 2 - 4, y - h / 2 + 18, 9, 22, 3, true);
+  roundRect(x + w / 2 - 5, y - h / 2 + 18, 9, 22, 3, true);
+
+  // Side exhaust pipes at rear
+  ctx.fillStyle = '#666';
+  ctx.fillRect(x - w / 2 - 10, y + h / 2 - 8, 6, 4);
+  ctx.fillRect(x + w / 2 + 4, y + h / 2 - 8, 6, 4);
+  ctx.fillStyle = '#222';
+  ctx.fillRect(x - w / 2 - 10, y + h / 2 - 5, 6, 2);
+  ctx.fillRect(x + w / 2 + 4, y + h / 2 - 5, 6, 2);
+
+  // Blaster cannon on the roof
+  ctx.fillStyle = '#333';
+  ctx.fillRect(x - 4, y - h / 2 - 14, 8, 12);
+  ctx.fillStyle = '#888';
+  ctx.fillRect(x - 3, y - h / 2 - 14, 6, 4);
+}
+
+function drawBolt(b) {
+  if (b.detonator) { drawDetonator(b); return; }
+  const glow = b.hostile ? 'rgba(255,30,30,0.5)' : (b.blue ? 'rgba(80,160,255,0.45)' : 'rgba(255,80,20,0.4)');
+  const core = b.hostile ? '#FF1010' : (b.blue ? '#3388FF' : '#FF3300');
+  const hot  = b.hostile ? '#FFCCCC' : (b.blue ? '#CCEEFF' : '#FFEE99');
+  ctx.fillStyle = glow;
+  roundRect(b.x - 6, b.y - 14, 12, 28, 6, true);
+  ctx.fillStyle = core;
+  roundRect(b.x - 3, b.y - 12, 6, 24, 3, true);
+  ctx.fillStyle = hot;
+  roundRect(b.x - 1.5, b.y - 10, 3, 20, 1.5, true);
+}
+
+function drawDetonator(b) {
+  // Smoke trail
+  ctx.fillStyle = 'rgba(160,160,160,0.35)';
+  ctx.beginPath();
+  ctx.arc(b.x - b.vx * 1.5, b.y - b.vy * 1.5, 3, 0, Math.PI * 2);
+  ctx.fill();
+  // Dark sphere
+  ctx.fillStyle = '#2c2c2c';
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.arc(b.x - 1, b.y - 1, 4, 0, Math.PI * 2);
+  ctx.fill();
+  // Highlight
+  ctx.fillStyle = '#555';
+  ctx.beginPath();
+  ctx.arc(b.x - 2, b.y - 2, 1.5, 0, Math.PI * 2);
+  ctx.fill();
+  // Blinking red LED
+  const blink = Math.floor(performance.now() / 90) % 2;
+  ctx.fillStyle = blink ? '#FF2020' : '#661010';
+  ctx.fillRect(b.x - 1, b.y - 1, 2, 2);
+}
+
+function drawAmmoPickup(a) {
+  const size = 34;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  roundRect(a.x - size / 2 + 3, a.y - size / 2 + 4, size, size, 6, true);
+  ctx.fillStyle = '#FFD400';
+  roundRect(a.x - size / 2, a.y - size / 2, size, size, 6, true);
+  ctx.strokeStyle = '#7a5c00';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(a.x - size / 2, a.y - size / 2, size, size);
+  ctx.fillStyle = '#7a1a00';
+  ctx.font = 'bold 12px -apple-system, Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('AMMO', a.x, a.y);
+  ctx.textBaseline = 'alphabetic';
+}
+
+function drawPortal(p) {
+  const size = 42;
+  const t = performance.now() * 0.004;
+  const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, size);
+  grad.addColorStop(0, 'rgba(200,240,255,1)');
+  grad.addColorStop(0.5, 'rgba(50,120,255,0.7)');
+  grad.addColorStop(1, 'rgba(0,0,80,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let a = 0; a < Math.PI * 4; a += 0.15) {
+    const r = a * 3;
+    const x = p.x + Math.cos(a + t) * r;
+    const y = p.y + Math.sin(a + t) * r;
+    if (a === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+function drawHelmetIcon(cx, cy, accent) {
+  ctx.fillStyle = '#FFF';
+  roundRect(cx - 11, cy - 8, 22, 14, 4, true);
+  if (accent === 'blue') {
+    ctx.strokeStyle = REX_BLUE;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx - 7, cy - 5);
+    ctx.quadraticCurveTo(cx - 5, cy - 9, cx - 2, cy - 6);
+    ctx.moveTo(cx + 2, cy - 6);
+    ctx.quadraticCurveTo(cx + 5, cy - 9, cx + 7, cy - 5);
+    ctx.stroke();
+  } else if (accent === 'orange') {
+    ctx.fillStyle = CODY_ORANGE;
+    ctx.fillRect(cx - 8, cy - 8, 3, 4);
+    ctx.fillRect(cx + 5, cy - 8, 3, 4);
+    // little rangefinder
+    ctx.fillStyle = '#444';
+    ctx.fillRect(cx - 13, cy - 6, 2, 3);
+    ctx.fillStyle = '#FF3333';
+    ctx.fillRect(cx - 15, cy - 6, 2, 2);
+  }
+  ctx.fillStyle = '#111';
+  ctx.fillRect(cx - 8, cy - 2, 16, 3);
+  ctx.fillRect(cx - 2, cy - 2, 4, 8);
+}
+
+function drawRexPickup(p) {
+  const size = 38;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  roundRect(p.x - size / 2 + 3, p.y - size / 2 + 4, size, size, 6, true);
+  ctx.fillStyle = REX_BLUE;
+  roundRect(p.x - size / 2, p.y - size / 2, size, size, 6, true);
+  ctx.strokeStyle = '#FFF';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(p.x - size / 2, p.y - size / 2, size, size);
+  drawHelmetIcon(p.x, p.y - 2, 'blue');
+  ctx.fillStyle = '#FFF';
+  ctx.font = 'bold 9px -apple-system, Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('REX!', p.x, p.y + 13);
+  ctx.textBaseline = 'alphabetic';
+}
+
+function drawCodyPickup(p) {
+  const size = 38;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  roundRect(p.x - size / 2 + 3, p.y - size / 2 + 4, size, size, 6, true);
+  ctx.fillStyle = CODY_ORANGE;
+  roundRect(p.x - size / 2, p.y - size / 2, size, size, 6, true);
+  ctx.strokeStyle = '#FFF';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(p.x - size / 2, p.y - size / 2, size, size);
+  drawHelmetIcon(p.x, p.y - 2, 'orange');
+  ctx.fillStyle = '#FFF';
+  ctx.font = 'bold 9px -apple-system, Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('CODY!', p.x, p.y + 13);
+  ctx.textBaseline = 'alphabetic';
+}
+
+function drawKixPickup(p) {
+  const size = 38;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  roundRect(p.x - size / 2 + 3, p.y - size / 2 + 4, size, size, 6, true);
+  ctx.fillStyle = '#FFFFFF';
+  roundRect(p.x - size / 2, p.y - size / 2, size, size, 6, true);
+  ctx.strokeStyle = REX_BLUE;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(p.x - size / 2, p.y - size / 2, size, size);
+  // Blue medic cross
+  ctx.fillStyle = REX_BLUE;
+  ctx.fillRect(p.x - 11, p.y - 4, 22, 8);
+  ctx.fillRect(p.x - 4, p.y - 11, 8, 22);
+  ctx.fillStyle = '#FFF';
+  ctx.font = 'bold 8px -apple-system, Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('KIX', p.x, p.y + 15);
+  ctx.textBaseline = 'alphabetic';
+}
+
+function drawTrooperPickup(p) {
+  const size = 36;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  roundRect(p.x - size / 2 + 3, p.y - size / 2 + 4, size, size, 6, true);
+  ctx.fillStyle = '#F0F0F0';
+  roundRect(p.x - size / 2, p.y - size / 2, size, size, 6, true);
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(p.x - size / 2, p.y - size / 2, size, size);
+  drawHelmetIcon(p.x, p.y - 2, null);
+  ctx.fillStyle = '#333';
+  ctx.font = 'bold 8px -apple-system, Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('CT', p.x, p.y + 12);
+  ctx.textBaseline = 'alphabetic';
+}
+
+function drawJetpack(cx, cy) {
+  const t = performance.now() * 0.02;
+  const flicker = 0.65 + Math.sin(t + cx * 0.1) * 0.35;
+  const flicker2 = 0.65 + Math.sin(t * 1.4 + cx * 0.15) * 0.35;
+
+  ctx.fillStyle = '#4a4a4a';
+  roundRect(cx - 20, cy + 6, 6, 24, 2, true);
+  roundRect(cx + 14, cy + 6, 6, 24, 2, true);
+  ctx.fillStyle = '#2a2a2a';
+  ctx.fillRect(cx - 20, cy + 28, 6, 3);
+  ctx.fillRect(cx + 14, cy + 28, 6, 3);
+
+  ctx.fillStyle = `rgba(255, 140, 40, ${flicker * 0.85})`;
+  ctx.beginPath();
+  ctx.moveTo(cx - 21, cy + 31);
+  ctx.lineTo(cx - 13, cy + 31);
+  ctx.lineTo(cx - 17, cy + 31 + 16 * flicker);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = `rgba(255, 240, 180, ${flicker})`;
+  ctx.beginPath();
+  ctx.moveTo(cx - 19, cy + 31);
+  ctx.lineTo(cx - 15, cy + 31);
+  ctx.lineTo(cx - 17, cy + 31 + 9 * flicker);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = `rgba(255, 140, 40, ${flicker2 * 0.85})`;
+  ctx.beginPath();
+  ctx.moveTo(cx + 13, cy + 31);
+  ctx.lineTo(cx + 21, cy + 31);
+  ctx.lineTo(cx + 17, cy + 31 + 16 * flicker2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = `rgba(255, 240, 180, ${flicker2})`;
+  ctx.beginPath();
+  ctx.moveTo(cx + 15, cy + 31);
+  ctx.lineTo(cx + 19, cy + 31);
+  ctx.lineTo(cx + 17, cy + 31 + 9 * flicker2);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawTrooper(w, accent) {
+  const cx = w.x, cy = w.y;
+  drawJetpack(cx, cy);
+
+  const bodyW = 26, bodyH = 32;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  roundRect(cx - bodyW / 2 + 2, cy, bodyW, bodyH, 5, true);
+  ctx.fillStyle = '#F5F5F5';
+  roundRect(cx - bodyW / 2, cy - 2, bodyW, bodyH, 5, true);
+
+  ctx.strokeStyle = '#BBB';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - 2); ctx.lineTo(cx, cy + 20);
+  ctx.stroke();
+  ctx.strokeRect(cx - 6, cy + 3, 12, 8);
+
+  if (accent) {
+    ctx.fillStyle = accent;
+    ctx.fillRect(cx - bodyW / 2, cy + 3, bodyW, 3);
+    ctx.fillRect(cx - bodyW / 2, cy + 18, bodyW, 3);
+  }
+
+  ctx.fillStyle = '#F5F5F5';
+  roundRect(cx - bodyW / 2 - 5, cy + 2, 7, 20, 3, true);
+  roundRect(cx + bodyW / 2 - 2, cy + 2, 7, 20, 3, true);
+  if (accent) {
+    ctx.fillStyle = accent;
+    roundRect(cx - bodyW / 2 - 5, cy + 14, 7, 8, 2, true);
+    roundRect(cx + bodyW / 2 - 2, cy + 14, 7, 8, 2, true);
+  }
+
+  ctx.fillStyle = '#222';
+  ctx.fillRect(cx - 2, cy - 14, 4, 14);
+  ctx.fillStyle = '#555';
+  ctx.fillRect(cx - 3, cy - 4, 6, 6);
+
+  const headSize = 22;
+  ctx.fillStyle = '#FFFFFF';
+  roundRect(cx - headSize / 2, cy - 26, headSize, 22, 6, true);
+  ctx.fillStyle = '#DDD';
+  ctx.fillRect(cx - headSize / 2, cy - 12, headSize, 2);
+
+  if (accent) {
+    ctx.fillStyle = accent;
+    ctx.fillRect(cx - 3, cy - 26, 6, 3);
+  }
+
+  ctx.fillStyle = '#111';
+  ctx.fillRect(cx - 8, cy - 20, 16, 4);
+  ctx.fillRect(cx - 2, cy - 20, 4, 10);
+
+  const barW = 30, barH = 4;
+  ctx.fillStyle = '#333';
+  ctx.fillRect(cx - barW / 2, cy - 36, barW, barH);
+  ctx.fillStyle = accent || '#DDD';
+  ctx.fillRect(cx - barW / 2, cy - 36, barW * (w.ammo / w.maxAmmo), barH);
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx - barW / 2, cy - 36, barW, barH);
+}
+
+function drawRex(w) {
+  const cx = w.x, cy = w.y;
+  drawJetpack(cx, cy);
+
+  const bodyW = 28, bodyH = 34;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  roundRect(cx - bodyW / 2 + 2, cy, bodyW, bodyH, 5, true);
+  ctx.fillStyle = '#F5F5F5';
+  roundRect(cx - bodyW / 2, cy - 2, bodyW, bodyH, 5, true);
+  ctx.fillStyle = REX_BLUE;
+  ctx.fillRect(cx - bodyW / 2, cy + 3, bodyW, 4);
+  ctx.fillRect(cx - bodyW / 2, cy + 18, bodyW, 4);
+  ctx.fillStyle = REX_BLUE;
+  ctx.fillRect(cx - 8, cy + 9, 3, 6);
+  ctx.fillRect(cx + 5, cy + 9, 3, 6);
+
+  ctx.fillStyle = REX_BLUE;
+  roundRect(cx - bodyW / 2 - 6, cy - 4, 10, 12, 3, true);
+  roundRect(cx + bodyW / 2 - 4, cy - 4, 10, 12, 3, true);
+
+  ctx.fillStyle = '#F5F5F5';
+  roundRect(cx - bodyW / 2 - 5, cy + 6, 7, 20, 3, true);
+  roundRect(cx + bodyW / 2 - 2, cy + 6, 7, 20, 3, true);
+  ctx.fillStyle = REX_BLUE;
+  roundRect(cx - bodyW / 2 - 5, cy + 16, 7, 10, 3, true);
+  roundRect(cx + bodyW / 2 - 2, cy + 16, 7, 10, 3, true);
+
+  ctx.fillStyle = '#222';
+  ctx.fillRect(cx - bodyW / 2 - 4, cy - 6, 4, 14);
+  ctx.fillRect(cx + bodyW / 2, cy - 6, 4, 14);
+  ctx.fillStyle = '#555';
+  ctx.fillRect(cx - bodyW / 2 - 5, cy + 6, 6, 4);
+  ctx.fillRect(cx + bodyW / 2 - 1, cy + 6, 6, 4);
+
+  const headSize = 22;
+  ctx.fillStyle = '#FFFFFF';
+  roundRect(cx - headSize / 2, cy - 28, headSize, 24, 6, true);
+  ctx.fillStyle = REX_BLUE;
+  ctx.fillRect(cx - 4, cy - 28, 8, 3);
+  ctx.fillRect(cx - headSize / 2, cy - 14, headSize, 2);
+
+  ctx.strokeStyle = REX_BLUE;
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - 9, cy - 21);
+  ctx.quadraticCurveTo(cx - 7, cy - 27, cx - 3, cy - 23);
+  ctx.moveTo(cx + 3, cy - 23);
+  ctx.quadraticCurveTo(cx + 7, cy - 27, cx + 9, cy - 21);
+  ctx.stroke();
+
+  ctx.fillStyle = '#111';
+  ctx.fillRect(cx - 8, cy - 20, 16, 4);
+  ctx.fillRect(cx - 2, cy - 20, 4, 10);
+
+  const barW = 34, barH = 4;
+  ctx.fillStyle = '#333';
+  ctx.fillRect(cx - barW / 2, cy - 40, barW, barH);
+  ctx.fillStyle = REX_BLUE;
+  ctx.fillRect(cx - barW / 2, cy - 40, barW * (w.ammo / w.maxAmmo), barH);
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx - barW / 2, cy - 40, barW, barH);
+}
+
+function drawCody(w) {
+  const cx = w.x, cy = w.y;
+  drawJetpack(cx, cy);
+
+  const bodyW = 28, bodyH = 34;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  roundRect(cx - bodyW / 2 + 2, cy, bodyW, bodyH, 5, true);
+  ctx.fillStyle = '#F5F5F5';
+  roundRect(cx - bodyW / 2, cy - 2, bodyW, bodyH, 5, true);
+
+  // Orange chest belts and details (212th)
+  ctx.fillStyle = CODY_ORANGE;
+  ctx.fillRect(cx - bodyW / 2, cy + 3, bodyW, 4);
+  ctx.fillRect(cx - bodyW / 2, cy + 18, bodyW, 4);
+  ctx.fillRect(cx - 7, cy + 9, 3, 7);
+  ctx.fillRect(cx + 4, cy + 9, 3, 7);
+
+  // Orange pauldrons
+  ctx.fillStyle = CODY_ORANGE;
+  roundRect(cx - bodyW / 2 - 6, cy - 4, 10, 12, 3, true);
+  roundRect(cx + bodyW / 2 - 4, cy - 4, 10, 12, 3, true);
+
+  // Arms with orange gauntlets
+  ctx.fillStyle = '#F5F5F5';
+  roundRect(cx - bodyW / 2 - 5, cy + 6, 7, 20, 3, true);
+  roundRect(cx + bodyW / 2 - 2, cy + 6, 7, 20, 3, true);
+  ctx.fillStyle = CODY_ORANGE;
+  roundRect(cx - bodyW / 2 - 5, cy + 16, 7, 10, 3, true);
+  roundRect(cx + bodyW / 2 - 2, cy + 16, 7, 10, 3, true);
+
+  // Thermal detonator held in right hand
+  ctx.fillStyle = '#2c2c2c';
+  ctx.beginPath();
+  ctx.arc(cx + bodyW / 2 + 3, cy + 9, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#FF2020';
+  ctx.fillRect(cx + bodyW / 2 + 2, cy + 7, 2, 2);
+
+  // Head / helmet
+  const headSize = 22;
+  ctx.fillStyle = '#FFFFFF';
+  roundRect(cx - headSize / 2, cy - 28, headSize, 24, 6, true);
+
+  // Orange helmet markings (T-visor accents + chin plate)
+  ctx.fillStyle = CODY_ORANGE;
+  ctx.fillRect(cx - 10, cy - 24, 3, 4);
+  ctx.fillRect(cx + 7, cy - 24, 3, 4);
+  ctx.fillRect(cx - 4, cy - 8, 8, 3);
+  ctx.fillRect(cx - headSize / 2, cy - 14, headSize, 2);
+
+  // T-visor
+  ctx.fillStyle = '#111';
+  ctx.fillRect(cx - 8, cy - 20, 16, 4);
+  ctx.fillRect(cx - 2, cy - 20, 4, 10);
+
+  // RANGEFINDER on left side of helmet (Cody's iconic feature)
+  ctx.fillStyle = '#444';
+  ctx.fillRect(cx - headSize / 2 - 2, cy - 22, 3, 8);
+  ctx.fillStyle = '#666';
+  ctx.fillRect(cx - headSize / 2 - 6, cy - 22, 5, 2);
+  ctx.fillStyle = '#FF2020';
+  ctx.fillRect(cx - headSize / 2 - 6, cy - 22, 2, 2);
+
+  // Ammo bar
+  const barW = 34, barH = 4;
+  ctx.fillStyle = '#333';
+  ctx.fillRect(cx - barW / 2, cy - 40, barW, barH);
+  ctx.fillStyle = CODY_ORANGE;
+  ctx.fillRect(cx - barW / 2, cy - 40, barW * (w.ammo / w.maxAmmo), barH);
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx - barW / 2, cy - 40, barW, barH);
+}
+
+function drawWingman(w) {
+  if (w.type === 'rex') drawRex(w);
+  else if (w.type === 'cody') drawCody(w);
+  else if (w.type === 'trooper-blue') drawTrooper(w, REX_BLUE);
+  else if (w.type === 'trooper-orange') drawTrooper(w, CODY_ORANGE);
+  else drawTrooper(w, null);
+}
+
+function drawKix(m) {
+  const cx = m.x, cy = m.y;
+  drawJetpack(cx, cy);
+
+  const bodyW = 26, bodyH = 32;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  roundRect(cx - bodyW / 2 + 2, cy, bodyW, bodyH, 5, true);
+  ctx.fillStyle = '#F5F5F5';
+  roundRect(cx - bodyW / 2, cy - 2, bodyW, bodyH, 5, true);
+
+  // Blue medic cross on chest
+  ctx.fillStyle = REX_BLUE;
+  ctx.fillRect(cx - 7, cy + 6, 14, 4);
+  ctx.fillRect(cx - 2, cy + 1, 4, 14);
+
+  // Blue shoulder stripes
+  ctx.fillStyle = REX_BLUE;
+  roundRect(cx - bodyW / 2 - 5, cy - 2, 7, 6, 2, true);
+  roundRect(cx + bodyW / 2 - 2, cy - 2, 7, 6, 2, true);
+
+  // Arms
+  ctx.fillStyle = '#F5F5F5';
+  roundRect(cx - bodyW / 2 - 5, cy + 4, 7, 20, 3, true);
+  roundRect(cx + bodyW / 2 - 2, cy + 4, 7, 20, 3, true);
+  // Blue gauntlets
+  ctx.fillStyle = REX_BLUE;
+  roundRect(cx - bodyW / 2 - 5, cy + 18, 7, 6, 2, true);
+  roundRect(cx + bodyW / 2 - 2, cy + 18, 7, 6, 2, true);
+
+  // Medpack held in front (no blaster)
+  ctx.fillStyle = '#FFF';
+  roundRect(cx - 6, cy - 10, 12, 10, 2, true);
+  ctx.fillStyle = REX_BLUE;
+  ctx.fillRect(cx - 5, cy - 6, 10, 2);
+  ctx.fillRect(cx - 1, cy - 9, 2, 8);
+
+  // Head / helmet
+  const headSize = 22;
+  ctx.fillStyle = '#FFFFFF';
+  roundRect(cx - headSize / 2, cy - 28, headSize, 24, 6, true);
+  ctx.fillStyle = REX_BLUE;
+  ctx.fillRect(cx - 4, cy - 28, 8, 3);
+  ctx.fillRect(cx - headSize / 2, cy - 14, headSize, 2);
+
+  // Blue medic cross on helmet forehead
+  ctx.fillStyle = REX_BLUE;
+  ctx.fillRect(cx - 5, cy - 12, 10, 2);
+  ctx.fillRect(cx - 1, cy - 15, 2, 6);
+
+  // T-visor
+  ctx.fillStyle = '#111';
+  ctx.fillRect(cx - 8, cy - 22, 16, 4);
+  ctx.fillRect(cx - 2, cy - 22, 4, 10);
+}
+
+function bossSaberSegments(boss) {
+  const hiltX = boss.x;
+  const hiltY = boss.y + 6;
+  const segs = [{
+    hiltX, hiltY,
+    tipX: hiltX + Math.cos(boss.saberAngle) * boss.saberLen,
+    tipY: hiltY + Math.sin(boss.saberAngle) * boss.saberLen
+  }];
+  if (boss.doubleSided) {
+    segs.push({
+      hiltX, hiltY,
+      tipX: hiltX + Math.cos(boss.saberAngle + Math.PI) * boss.saberLen,
+      tipY: hiltY + Math.sin(boss.saberAngle + Math.PI) * boss.saberLen
+    });
+  }
+  return segs;
+}
+
+function drawSaber(seg) {
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(255,60,60,0.35)';
+  ctx.lineWidth = 16;
+  ctx.beginPath(); ctx.moveTo(seg.hiltX, seg.hiltY); ctx.lineTo(seg.tipX, seg.tipY); ctx.stroke();
+  ctx.strokeStyle = '#FF2020';
+  ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.moveTo(seg.hiltX, seg.hiltY); ctx.lineTo(seg.tipX, seg.tipY); ctx.stroke();
+  ctx.strokeStyle = '#FFDDDD';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(seg.hiltX, seg.hiltY); ctx.lineTo(seg.tipX, seg.tipY); ctx.stroke();
+}
+
+function drawHpBar(cx, topY, w, hp, maxHp) {
+  const barH = 7;
+  ctx.fillStyle = '#333';
+  ctx.fillRect(cx - w / 2, topY, w, barH);
+  ctx.fillStyle = '#FF3333';
+  ctx.fillRect(cx - w / 2, topY, w * (hp / maxHp), barH);
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx - w / 2, topY, w, barH);
+}
+
+function drawVader(v) {
+  const cx = v.x, cy = v.y;
+  const w = v.width, h = v.height;
+  ctx.fillStyle = '#141414';
+  ctx.beginPath();
+  ctx.moveTo(cx - w / 2 - 6, cy - h / 2 + 22);
+  ctx.lineTo(cx + w / 2 + 6, cy - h / 2 + 22);
+  ctx.lineTo(cx + w / 2 + 18, cy + h / 2 + 12);
+  ctx.lineTo(cx - w / 2 - 18, cy + h / 2 + 12);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#000';
+  roundRect(cx - w / 2 + 4, cy - h / 2 + 22, w - 8, h - 22, 6, true);
+  ctx.fillStyle = '#FF3333';
+  ctx.fillRect(cx - 10, cy - 4, 4, 4);
+  ctx.fillRect(cx + 6, cy - 4, 4, 4);
+  ctx.fillStyle = '#33FF66';
+  ctx.fillRect(cx - 3, cy - 4, 4, 4);
+  ctx.fillStyle = '#FFD400';
+  ctx.fillRect(cx - 10, cy + 4, 20, 3);
+  ctx.fillStyle = '#0a0a0a';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - h / 2 + 12, w / 2 - 2, 22, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#2a2a2a';
+  ctx.beginPath();
+  ctx.ellipse(cx - 7, cy - h / 2 + 6, 6, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#111';
+  ctx.fillRect(cx - 18, cy - h / 2 + 8, 36, 9);
+  ctx.fillStyle = '#8B0000';
+  ctx.fillRect(cx - 13, cy - h / 2 + 10, 7, 4);
+  ctx.fillRect(cx + 6, cy - h / 2 + 10, 7, 4);
+  ctx.fillStyle = '#222';
+  ctx.fillRect(cx - 9, cy - h / 2 + 18, 18, 5);
+  for (const seg of bossSaberSegments(v)) drawSaber(seg);
+  ctx.fillStyle = '#888';
+  ctx.fillRect(cx - 4, cy + 2, 10, 10);
+  drawHpBar(cx, cy - h / 2 - 20, 100, v.hp, v.maxHp);
+}
+
+function drawInquisitor(v) {
+  const cx = v.x, cy = v.y;
+  const w = v.width, h = v.height;
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.moveTo(cx - w / 2 - 5, cy - h / 2 + 20);
+  ctx.lineTo(cx + w / 2 + 5, cy - h / 2 + 20);
+  ctx.lineTo(cx + w / 2 + 14, cy + h / 2 + 12);
+  ctx.lineTo(cx - w / 2 - 14, cy + h / 2 + 12);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#2c2c2c';
+  roundRect(cx - w / 2 + 4, cy - h / 2 + 20, w - 8, h - 20, 6, true);
+  ctx.fillStyle = '#0e0e0e';
+  ctx.beginPath();
+  ctx.moveTo(cx - 22, cy - h / 2 + 22);
+  ctx.quadraticCurveTo(cx - 26, cy - h / 2 - 12, cx, cy - h / 2 - 14);
+  ctx.quadraticCurveTo(cx + 26, cy - h / 2 - 12, cx + 22, cy - h / 2 + 22);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#B8A090';
+  roundRect(cx - 13, cy - h / 2 + 2, 26, 20, 6, true);
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.fillRect(cx - 13, cy - h / 2 + 16, 26, 4);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(cx - 11, cy - h / 2 + 10, 8, 3);
+  ctx.fillRect(cx + 3, cy - h / 2 + 10, 8, 3);
+  ctx.fillStyle = '#FF5555';
+  ctx.fillRect(cx - 10, cy - h / 2 + 11, 6, 1);
+  ctx.fillRect(cx + 4, cy - h / 2 + 11, 6, 1);
+  ctx.fillStyle = '#CC1010';
+  ctx.beginPath();
+  ctx.arc(cx, cy + 6, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 6; i++) {
+    const a = i * Math.PI / 3;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + 6);
+    ctx.lineTo(cx + Math.cos(a) * 6, cy + 6 + Math.sin(a) * 6);
+    ctx.stroke();
+  }
+  for (const seg of bossSaberSegments(v)) drawSaber(seg);
+  ctx.fillStyle = '#666';
+  ctx.fillRect(cx - 7, cy + 2, 14, 8);
+  ctx.fillStyle = '#333';
+  ctx.fillRect(cx - 7, cy + 4, 14, 2);
+  drawHpBar(cx, cy - h / 2 - 20, 70, v.hp, v.maxHp);
+}
+
+function drawEnemyStormtrooper(v) {
+  const cx = v.x, cy = v.y;
+  const w = v.width, h = v.height;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  roundRect(cx - w / 2 + 3, cy - h / 2 + 4, w, h, 6, true);
+
+  // White armor body
+  ctx.fillStyle = '#EEEEEE';
+  roundRect(cx - w / 2, cy - h / 2, w, h, 6, true);
+
+  // Black abdominal joint
+  ctx.fillStyle = '#111';
+  ctx.fillRect(cx - w / 2 + 3, cy + 4, w - 6, 3);
+  ctx.fillRect(cx - w / 2 + 3, cy + h / 2 - 12, w - 6, 3);
+
+  // Chest plates outline
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx - 12, cy - h / 2 + 22, 24, 12);
+
+  // Helmet
+  ctx.fillStyle = '#F8F8F8';
+  roundRect(cx - w / 2 + 4, cy - h / 2 + 2, w - 8, 22, 6, true);
+  // brow ridge
+  ctx.fillStyle = '#DDD';
+  ctx.fillRect(cx - w / 2 + 4, cy - h / 2 + 4, w - 8, 2);
+  // eye sockets
+  ctx.fillStyle = '#000';
+  roundRect(cx - 12, cy - h / 2 + 8, 8, 5, 1, true);
+  roundRect(cx + 4, cy - h / 2 + 8, 8, 5, 1, true);
+  // mouth vent (frown)
+  ctx.fillStyle = '#333';
+  ctx.fillRect(cx - 7, cy - h / 2 + 16, 14, 3);
+  // frown corners
+  ctx.fillRect(cx - 9, cy - h / 2 + 15, 2, 2);
+  ctx.fillRect(cx + 7, cy - h / 2 + 15, 2, 2);
+
+  // Blaster (E-11) held forward
+  ctx.fillStyle = '#222';
+  ctx.fillRect(cx - 3, cy + h / 2 - 6, 6, 12);
+  ctx.fillRect(cx - 2, cy + h / 2 + 6, 4, 6);
+  ctx.fillStyle = '#555';
+  ctx.fillRect(cx - 4, cy + h / 2 - 2, 8, 3);
+
+  // HP bar
+  drawHpBar(cx, cy - h / 2 - 14, 44, v.hp, v.maxHp);
+}
+
+function drawBoss(boss) {
+  if (boss.type === 'vader') drawVader(boss);
+  else if (boss.type === 'inquisitor') drawInquisitor(boss);
+  else if (boss.type === 'stormtrooper') drawEnemyStormtrooper(boss);
+}
+
+function drawTrack() {
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = TRACK_RAIL;
+  ctx.fillRect(0, 0, 40, H);
+  ctx.fillRect(W - 40, 0, 40, H);
+  ctx.fillStyle = TRACK_ORANGE;
+  ctx.fillRect(40, 0, W - 80, H);
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.fillRect(36, 0, 4, H);
+  ctx.fillRect(W - 40, 0, 4, H);
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.fillRect(0, 0, 4, H);
+  ctx.fillRect(W - 4, 0, 4, H);
+  ctx.fillStyle = '#FFFFFF';
+  const dashLen = 44, gap = 34;
+  const cycle = dashLen + gap;
+  const offset = scrollY % cycle;
+  for (let y = -cycle + offset; y < H + cycle; y += cycle) {
+    ctx.fillRect(W / 2 - 4, y, 8, dashLen);
+  }
+  if (state === 'playing' && speed > 5 && !lightspeedActive()) {
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    for (let i = 0; i < 6; i++) {
+      const lx = 60 + Math.random() * (W - 120);
+      const ly = (scrollY * 3 + i * 200) % H;
+      ctx.fillRect(lx, ly, 2, 30);
+    }
+  }
+}
+
+// Arcade-style stacked text (drop shadow + thick outline + shiny gradient fill)
+function drawArcadeText(text, cx, cy, size, primaryColor, highlightColor) {
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `900 ${size}px Impact, "Arial Black", Arial`;
+  // Drop shadow
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.fillText(text, cx + 3, cy + 4);
+  // Thick black outline
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = Math.max(3, size * 0.14);
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+  ctx.strokeText(text, cx, cy);
+  // Body gradient
+  const g = ctx.createLinearGradient(0, cy - size * 0.5, 0, cy + size * 0.5);
+  g.addColorStop(0, highlightColor);
+  g.addColorStop(0.55, primaryColor);
+  g.addColorStop(1, primaryColor);
+  ctx.fillStyle = g;
+  ctx.fillText(text, cx, cy);
+  // Top shine
+  const g2 = ctx.createLinearGradient(0, cy - size * 0.5, 0, cy - size * 0.1);
+  g2.addColorStop(0, 'rgba(255,255,255,0.55)');
+  g2.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g2;
+  ctx.fillText(text, cx, cy);
+  ctx.restore();
+}
+
+function drawGameLogo(cx, cy, scale) {
+  scale = scale || 1;
+  drawArcadeText('SUPER SONNY', cx, cy - 18 * scale, 38 * scale, '#FF3300', '#FFD400');
+  drawArcadeText('SPEED BOOST', cx, cy + 22 * scale, 32 * scale, '#00B4FF', '#B4EEFF');
+}
+
+// Named button geometry (used for both drawing and hit tests)
+const BTN_SKIP    = { x: W / 2 - 70, y: null,  w: 140, h: 44 };  // y set at draw time
+const BTN_RESUME  = { x: W / 2 - 90, y: null,  w: 180, h: 50 };
+function drawButton(rect, label, color) {
+  ctx.fillStyle = 'rgba(20, 20, 20, 0.95)';
+  roundRect(rect.x, rect.y, rect.w, rect.h, 10, true);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 22px -apple-system, Arial';
+  ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2 + 1);
+  ctx.textBaseline = 'alphabetic';
+}
+function skipButtonHit(pos) {
+  return enteringName && BTN_SKIP.y !== null &&
+         pos.x >= BTN_SKIP.x && pos.x <= BTN_SKIP.x + BTN_SKIP.w &&
+         pos.y >= BTN_SKIP.y && pos.y <= BTN_SKIP.y + BTN_SKIP.h;
+}
+function resumeButtonHit(pos) {
+  return state === 'paused' && BTN_RESUME.y !== null &&
+         pos.x >= BTN_RESUME.x && pos.x <= BTN_RESUME.x + BTN_RESUME.w &&
+         pos.y >= BTN_RESUME.y && pos.y <= BTN_RESUME.y + BTN_RESUME.h;
+}
+
+function drawPauseButton() {
+  const bx = W - 46, by = 6;
+  const bw = 36, bh = 34;
+  ctx.fillStyle = 'rgba(30, 30, 30, 0.9)';
+  roundRect(bx, by, bw, bh, 6, true);
+  ctx.strokeStyle = state === 'paused' ? '#00E5C7' : '#DDD';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(bx, by, bw, bh);
+  if (state === 'paused') {
+    ctx.fillStyle = '#00E5C7';
+    ctx.beginPath();
+    ctx.moveTo(bx + 12, by + 8);
+    ctx.lineTo(bx + 12, by + 26);
+    ctx.lineTo(bx + 26, by + 17);
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    ctx.fillStyle = '#FFF';
+    ctx.fillRect(bx + 11, by + 9, 5, 16);
+    ctx.fillRect(bx + 20, by + 9, 5, 16);
+  }
+}
+
+function drawLightspeedOverlay() {
+  ctx.fillStyle = 'rgba(0, 0, 40, 0.4)';
+  ctx.fillRect(0, 0, W, H);
+  for (let i = 0; i < 55; i++) {
+    const sx = (i * 137 + 20) % W;
+    const sy = ((i * 89 + scrollY * 6) % (H + 120)) - 60;
+    const alpha = 0.6 + (i % 3) * 0.15;
+    ctx.strokeStyle = `rgba(200, 220, 255, ${alpha})`;
+    ctx.lineWidth = 2 + (i % 3);
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(sx, sy + 90);
+    ctx.stroke();
+  }
+}
+
+// -------------------- Spawns --------------------
+function spawnCar() {
+  const minX = 65, maxX = W - 65;
+  let x; let tries = 0;
+  do {
+    x = minX + Math.random() * (maxX - minX);
+    tries++;
+  } while (tries < 8 && cars.some(c => c.y < 120 && Math.abs(c.x - x) < 90));
+  cars.push({
+    x, y: -60, width: 50, height: 90,
+    color: CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)],
+    extraSpeed: Math.random() * 2
+  });
+}
+function spawnAmmo() {
+  const minX = 70, maxX = W - 70;
+  ammoPickups.push({ x: minX + Math.random() * (maxX - minX), y: -40 });
+}
+function spawnPortal() {
+  const minX = 80, maxX = W - 80;
+  portals.push({ x: minX + Math.random() * (maxX - minX), y: -50 });
+}
+function spawnRexPickup() {
+  const minX = 80, maxX = W - 80;
+  rexPickups.push({ x: minX + Math.random() * (maxX - minX), y: -50 });
+}
+function spawnCodyPickup() {
+  const minX = 80, maxX = W - 80;
+  codyPickups.push({ x: minX + Math.random() * (maxX - minX), y: -50 });
+}
+function spawnTrooperPickup() {
+  const minX = 80, maxX = W - 80;
+  trooperPickups.push({ x: minX + Math.random() * (maxX - minX), y: -50 });
+}
+function spawnKixPickup() {
+  const minX = 80, maxX = W - 80;
+  kixPickups.push({ x: minX + Math.random() * (maxX - minX), y: -50 });
+}
+function addKix() {
+  if (medics.length >= MEDIC_SLOTS.length) return false;
+  const used = new Set(medics.map(m => m.slotIdx));
+  let slotIdx = -1;
+  for (let i = 0; i < MEDIC_SLOTS.length; i++) {
+    if (!used.has(i)) { slotIdx = i; break; }
+  }
+  if (slotIdx < 0) return false;
+  const s = MEDIC_SLOTS[slotIdx];
+  medics.push({
+    slotIdx,
+    x: player.x + s.dx,
+    y: player.y + s.dy
+  });
+  return true;
+}
+function assignSlot() {
+  const used = new Set(wingmen.map(w => w.slot));
+  for (const s of WINGMAN_SLOTS) if (!used.has(s)) return s;
+  return null;
+}
+function addWingman(type) {
+  const slot = assignSlot();
+  if (slot === null) return false;
+  let ammo, maxAmmo;
+  if (type === 'rex') { ammo = maxAmmo = REX_AMMO; }
+  else if (type === 'cody') { ammo = maxAmmo = CODY_AMMO; }
+  else { ammo = maxAmmo = TROOPER_AMMO; }
+  wingmen.push({
+    type, x: player.x + slot, y: player.y + 10, slot,
+    cooldown: 15, ammo, maxAmmo, leaving: false
+  });
+  return true;
+}
+// If slots are full, promote a plain trooper to Rex or Cody
+function replaceWingman(newType) {
+  const idx = wingmen.findIndex(w =>
+    (w.type === 'trooper' || w.type === 'trooper-blue' || w.type === 'trooper-orange') && !w.leaving
+  );
+  if (idx < 0) return false;
+  const old = wingmen[idx];
+  const ammo = newType === 'rex' ? REX_AMMO : CODY_AMMO;
+  wingmen[idx] = {
+    type: newType,
+    x: old.x, y: old.y,
+    slot: old.slot,
+    cooldown: 15,
+    ammo, maxAmmo: ammo,
+    leaving: false
+  };
+  return true;
+}
+function makeBoss(type, x) {
+  if (type === 'vader') {
+    return {
+      type: 'vader', x, y: -80, targetX: x,
+      width: 68, height: 90,
+      hp: VADER_HP, maxHp: VADER_HP,
+      saberAngle: 0, saberLen: VADER_SABER_LEN,
+      doubleSided: false,
+      moveTimer: 90, entering: true
+    };
+  }
+  return {
+    type: 'inquisitor', x, y: -80, targetX: x,
+    width: 58, height: 82,
+    hp: INQUISITOR_HP, maxHp: INQUISITOR_HP,
+    saberAngle: Math.PI * 0.5, saberLen: INQUISITOR_SABER_LEN,
+    doubleSided: true,
+    moveTimer: 60, entering: true
+  };
+}
+function makeStormtrooper(x) {
+  return {
+    type: 'stormtrooper', x, y: -70, targetX: x,
+    width: 44, height: 62,
+    hp: STORMTROOPER_HP, maxHp: STORMTROOPER_HP,
+    shootCooldown: STORMTROOPER_SHOOT_MIN + Math.random() * STORMTROOPER_SHOOT_JITTER,
+    moveTimer: 60, entering: true
+  };
+}
+function spawnBossWave() {
+  bossWave++;
+  const cycle = (bossWave - 1) % 7;
+  const cx = W / 2;
+  switch (cycle) {
+    case 0:
+      bosses.push(makeStormtrooper(cx));
+      break;
+    case 1:
+      bosses.push(makeStormtrooper(W * 0.3));
+      bosses.push(makeStormtrooper(W * 0.7));
+      break;
+    case 2:
+      bosses.push(makeBoss('vader', cx));
+      break;
+    case 3:
+      bosses.push(makeBoss('vader', cx));
+      bosses.push(makeStormtrooper(W * 0.2));
+      bosses.push(makeStormtrooper(W * 0.8));
+      break;
+    case 4:
+      bosses.push(makeBoss('vader', cx - 75));
+      bosses.push(makeBoss('inquisitor', cx + 75));
+      break;
+    case 5:
+      bosses.push(makeBoss('vader', cx));
+      bosses.push(makeBoss('inquisitor', W * 0.22));
+      bosses.push(makeBoss('inquisitor', W * 0.78));
+      break;
+    case 6:
+      bosses.push(makeBoss('vader', cx));
+      bosses.push(makeBoss('inquisitor', W * 0.22));
+      bosses.push(makeBoss('inquisitor', W * 0.78));
+      bosses.push(makeStormtrooper(W * 0.36));
+      bosses.push(makeStormtrooper(W * 0.64));
+      break;
+  }
+  vaderAlertTimer = 110;
+  if (cycle >= 2) playImperialMarch();
+  else playAlarm();
+}
+
+function makeExplosion(x, y, color) {
+  for (let i = 0; i < 20; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = 1 + Math.random() * 4;
+    particles.push({
+      x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+      life: 30 + Math.random() * 15,
+      size: 3 + Math.random() * 4,
+      color: Math.random() < 0.5 ? '#FF6A00' : (Math.random() < 0.5 ? '#FFD400' : color)
+    });
+  }
+}
+function makeSparks(x, y) {
+  for (let i = 0; i < 10; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = 2 + Math.random() * 3;
+    particles.push({
+      x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+      life: 14,
+      size: 2 + Math.random() * 2,
+      color: Math.random() < 0.5 ? '#FFFFFF' : '#FFDDDD'
+    });
+  }
+}
+
+// Detonator explosion — area damage to bosses + cars
+function detonatorExplode(x, y) {
+  makeExplosion(x, y, '#FF6A00');
+  makeExplosion(x + 18, y - 12, '#FFD400');
+  makeExplosion(x - 18, y + 12, '#FF3300');
+  playBoom();
+  for (const boss of bosses) {
+    if (Math.hypot(boss.x - x, boss.y - y) < DETONATOR_RADIUS) {
+      boss.hp--;
+      if (boss.hp <= 0) {
+        makeExplosion(boss.x, boss.y, '#FF0000');
+        score += boss.type === 'vader' ? 300 : (boss.type === 'inquisitor' ? 150 : 75);
+        boss.dead = true;
+      }
+    }
+  }
+  for (const c of cars) {
+    if (Math.hypot(c.x - x, c.y - y) < DETONATOR_RADIUS) {
+      makeExplosion(c.x, c.y, c.color);
+      score += 25;
+      c.dead = true;
+    }
+  }
+}
+
+function lightspeedActive() { return lightspeedMilesLeft > 0; }
+function hasRexActive()  { return wingmen.some(w => w.type === 'rex'  && !w.leaving); }
+function hasCodyActive() { return wingmen.some(w => w.type === 'cody' && !w.leaving); }
+
+// Handles player death — triggers Kix cinematic if any medpack is stored
+function tryCrashPlayer(cause) {
+  if (state !== 'playing') return;
+  if (reviveInvincible > 0) return;
+
+  if (medics.length > 0) {
+    // Start the CRASH → Kix → ALL BETTER cinematic
+    reviveMedic = medics.pop();
+    reviveStage = 0;
+    reviveStageTimer = 55;
+    reviveCause = cause;
+    state = 'reviving';
+    flashTimer = 22;
+    playBoom();
+    return;
+  }
+
+  crashCause = cause;
+  state = 'crashed';
+  flashTimer = 20;
+  makeExplosion(player.x, player.y, player.color);
+  playBoom();
+
+  if (checkLeaderboardQualifies(score)) {
+    entryScore = score;
+    showNameEntry();
+  }
+}
+
+function updateRevive() {
+  reviveStageTimer--;
+
+  // Stage-specific effects
+  if (reviveStage === 0) {
+    // CRASH! — smoke off the player car
+    if (Math.random() < 0.4) {
+      particles.push({
+        x: player.x + (Math.random() - 0.5) * player.width,
+        y: player.y + (Math.random() - 0.5) * player.height,
+        vx: (Math.random() - 0.5) * 1.5,
+        vy: -1 - Math.random() * 2,
+        life: 32,
+        size: 4 + Math.random() * 3,
+        color: Math.random() < 0.5 ? '#666' : '#999'
+      });
+    }
+  } else if (reviveStage === 1) {
+    // Kix flies toward the player
+    if (reviveMedic) {
+      const targetX = player.x - 34;
+      const targetY = player.y + 4;
+      reviveMedic.x += (targetX - reviveMedic.x) * 0.18;
+      reviveMedic.y += (targetY - reviveMedic.y) * 0.18;
+    }
+  } else if (reviveStage === 2) {
+    // ALL BETTER — sparkle green healing particles
+    if (Math.random() < 0.7) {
+      particles.push({
+        x: player.x + (Math.random() - 0.5) * (player.width + 20),
+        y: player.y + (Math.random() - 0.5) * (player.height + 20),
+        vx: (Math.random() - 0.5) * 1.5,
+        vy: -1 - Math.random() * 2,
+        life: 26,
+        size: 3 + Math.random() * 2,
+        color: Math.random() < 0.5 ? '#33FF77' : '#FFFFFF'
+      });
+    }
+  }
+
+  // Particles age even during the freeze so smoke/sparkles animate
+  for (const p of particles) {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vx *= 0.96; p.vy *= 0.96;
+    p.life--;
+  }
+  particles = particles.filter(p => p.life > 0);
+
+  if (reviveStageTimer <= 0) {
+    reviveStage++;
+    if (reviveStage === 1) {
+      reviveStageTimer = 45;
+      playKixArrival();
+    } else if (reviveStage === 2) {
+      reviveStageTimer = 60;
+      playMedpack();
+      // Green burst
+      for (let i = 0; i < 26; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const s = 1 + Math.random() * 3;
+        particles.push({
+          x: player.x, y: player.y,
+          vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+          life: 34,
+          size: 3 + Math.random() * 3,
+          color: Math.random() < 0.5 ? '#33FF77' : '#FFFFFF'
+        });
+      }
+    } else {
+      // Done — back to racing with a brief shield
+      state = 'playing';
+      reviveInvincible = REVIVE_INVINCIBLE_FRAMES;
+      reviveMedic = null;
+      reviveStage = 0;
+    }
+  }
+}
+
+// -------------------- Update --------------------
+function update() {
+  if (state === 'reviving') { updateRevive(); return; }
+  if (state !== 'playing') return;
+
+  const moveSpeed = 6;
+  if (steerTargetX !== null) {
+    // Touch steering — car chases the finger's X position
+    const diff = steerTargetX - player.x;
+    const step = 10;
+    if (Math.abs(diff) < step) player.x = steerTargetX;
+    else player.x += Math.sign(diff) * step;
+  } else {
+    if (keys['ArrowLeft']) player.x -= moveSpeed;
+    if (keys['ArrowRight']) player.x += moveSpeed;
+  }
+  const minX = 65, maxX = W - 65;
+  if (player.x < minX) player.x = minX;
+  if (player.x > maxX) player.x = maxX;
+  if (player.shootCooldown > 0) player.shootCooldown--;
+
+  if (lightspeedActive()) {
+    speed = 32;
+    lightspeedMilesLeft -= LIGHTSPEED_PER_FRAME;
+    if (lightspeedMilesLeft <= 0) {
+      lightspeedMilesLeft = 0;
+      tone('sine', 1200, 300, 0.3, 0.14);
+    }
+  } else {
+    speed = 5 + Math.min(5, score / 600);
+  }
+  scrollY += speed;
+
+  const extraPush = lightspeedActive() ? speed * 1.2 : 0;
+
+  for (const c of cars) c.y += speed + c.extraSpeed + extraPush;
+  cars = cars.filter(c => c.y < H + 100);
+
+  for (const a of ammoPickups) a.y += speed;
+  ammoPickups = ammoPickups.filter(a => a.y < H + 60);
+
+  for (const p of portals) p.y += speed;
+  portals = portals.filter(p => p.y < H + 60);
+
+  for (const p of rexPickups) p.y += speed;
+  rexPickups = rexPickups.filter(p => p.y < H + 60);
+
+  for (const p of codyPickups) p.y += speed;
+  codyPickups = codyPickups.filter(p => p.y < H + 60);
+
+  for (const p of trooperPickups) p.y += speed;
+  trooperPickups = trooperPickups.filter(p => p.y < H + 60);
+
+  for (const p of kixPickups) p.y += speed;
+  kixPickups = kixPickups.filter(p => p.y < H + 60);
+
+  // Move bolts (detonators have gravity + timer)
+  for (const b of bolts) {
+    b.x += b.vx; b.y += b.vy;
+    if (b.detonator) {
+      b.vy += DETONATOR_GRAVITY;
+      b.timer--;
+    }
+  }
+  bolts = bolts.filter(b => b.y > -40 && b.y < H + 40 && b.x > -20 && b.x < W + 20);
+
+  // Detonators explode on timer or on contact with any enemy
+  for (const b of bolts) {
+    if (b.dead || !b.detonator) continue;
+    let hit = b.timer <= 0;
+    if (!hit) {
+      for (const boss of bosses) {
+        if (Math.abs(b.x - boss.x) < boss.width / 2 + 4 &&
+            Math.abs(b.y - boss.y) < boss.height / 2 + 4) { hit = true; break; }
+      }
+    }
+    if (!hit) {
+      for (const c of cars) {
+        if (Math.abs(b.x - c.x) < c.width / 2 + 4 &&
+            Math.abs(b.y - c.y) < c.height / 2 + 4) { hit = true; break; }
+      }
+    }
+    if (hit) {
+      detonatorExplode(b.x, b.y);
+      b.dead = true;
+    }
+  }
+  bolts = bolts.filter(b => !b.dead);
+  bosses = bosses.filter(b => !b.dead);
+  cars = cars.filter(c => !c.dead);
+
+  for (const p of particles) {
+    p.x += p.vx;
+    p.y += p.vy + speed * 0.3;
+    p.vx *= 0.96; p.vy *= 0.96;
+    p.life--;
+  }
+  particles = particles.filter(p => p.life > 0);
+
+  const bossesPresent = bosses.length > 0;
+
+  if (!lightspeedActive()) {
+    spawnCooldown--;
+    if (spawnCooldown <= 0) {
+      spawnCar();
+      const base = Math.max(22, 44 - Math.floor(score / 250));
+      spawnCooldown = bossesPresent ? base * 2 : base;
+    }
+  }
+
+  if (!lightspeedActive()) {
+    ammoSpawnTimer--;
+    if (ammoSpawnTimer <= 0) {
+      spawnAmmo();
+      ammoSpawnTimer = bossesPresent
+        ? 140 + Math.floor(Math.random() * 80)
+        : 260 + Math.floor(Math.random() * 200);
+    }
+  }
+
+  if (!lightspeedActive()) {
+    portalTimer--;
+    if (portalTimer <= 0) {
+      if (Math.random() < 0.6) spawnPortal();
+      portalTimer = 900 + Math.floor(Math.random() * 700);
+    }
+  }
+
+  if (!lightspeedActive() && !hasRexActive()) {
+    rexPickupTimer--;
+    if (rexPickupTimer <= 0) {
+      if (Math.random() < 0.55) spawnRexPickup();
+      rexPickupTimer = 700 + Math.floor(Math.random() * 500);
+    }
+  }
+
+  if (!lightspeedActive() && !hasCodyActive()) {
+    codyPickupTimer--;
+    if (codyPickupTimer <= 0) {
+      if (Math.random() < 0.5) spawnCodyPickup();
+      codyPickupTimer = 800 + Math.floor(Math.random() * 500);
+    }
+  }
+
+  if (!lightspeedActive()) {
+    trooperPickupTimer--;
+    if (trooperPickupTimer <= 0) {
+      if (Math.random() < 0.7) spawnTrooperPickup();
+      trooperPickupTimer = 500 + Math.floor(Math.random() * 500);
+    }
+  }
+
+  if (!lightspeedActive()) {
+    kixPickupTimer--;
+    if (kixPickupTimer <= 0) {
+      if (medics.length < MEDIC_SLOTS.length && Math.random() < 0.55) spawnKixPickup();
+      kixPickupTimer = 950 + Math.floor(Math.random() * 700);
+    }
+  }
+
+  score += 1;
+  if (score > bestScore) {
+    bestScore = score;
+    localStorage.setItem('sonnyBest', String(bestScore));
+  }
+
+  if (vaderAlertTimer > 0) vaderAlertTimer--;
+  if (lightspeedAlertTimer > 0) lightspeedAlertTimer--;
+  if (rexAlertTimer > 0) rexAlertTimer--;
+  if (codyAlertTimer > 0) codyAlertTimer--;
+  if (kixAlertTimer > 0) kixAlertTimer--;
+  if (trooperAlertTimer > 0) trooperAlertTimer--;
+  if (reviveInvincible > 0) reviveInvincible--;
+
+  if (!waveActive && !lightspeedActive() && score >= vaderNextAt) {
+    spawnBossWave();
+    waveActive = true;
+  }
+
+  // Boss / enemy movement
+  for (const b of bosses) {
+    if (b.entering) {
+      const targetY = b.type === 'stormtrooper' ? 100 : 115;
+      b.y += 3;
+      if (b.y >= targetY) { b.y = targetY; b.entering = false; }
+    } else {
+      b.moveTimer--;
+      if (b.moveTimer <= 0) {
+        b.targetX = 80 + Math.random() * (W - 160);
+        b.moveTimer = 55 + Math.random() * 40;
+      }
+      b.x += (b.targetX - b.x) * 0.045;
+      if (!lightspeedActive()) b.y += BOSS_DESCENT;
+    }
+    if (b.type !== 'stormtrooper') b.saberAngle += SABER_ROT;
+
+    // Stormtroopers periodically fire straight down (they can't turn)
+    if (b.type === 'stormtrooper' && !b.entering && !lightspeedActive()) {
+      b.shootCooldown--;
+      if (b.shootCooldown <= 0) {
+        bolts.push({
+          x: b.x, y: b.y + b.height / 2 + 6,
+          vx: 0, vy: 9,
+          hostile: true, blue: false
+        });
+        playEnemyBlast();
+        b.shootCooldown = STORMTROOPER_SHOOT_MIN + Math.random() * STORMTROOPER_SHOOT_JITTER;
+      }
+    }
+
+    if (lightspeedActive()) b.y += speed * 0.6;
+  }
+  bosses = bosses.filter(b => b.y <= H + 60);
+
+  // Bolt vs bosses (skip detonators + hostile bolts + skip saber for stormtrooper)
+  for (const boss of bosses) {
+    const segs = boss.type !== 'stormtrooper' ? bossSaberSegments(boss) : [];
+    for (const b of bolts) {
+      if (b.dead || b.hostile || b.detonator) continue;
+      let reflected = false;
+      for (const seg of segs) {
+        const d = pointSegDist(b.x, b.y, seg.hiltX, seg.hiltY, seg.tipX, seg.tipY);
+        if (d < SABER_HIT_R) {
+          b.hostile = true;
+          b.vy = 8;
+          b.vx = ((player.x - b.x) / Math.max(H - b.y, 1)) * 8;
+          makeSparks(b.x, b.y);
+          playSaberClash();
+          reflected = true;
+          break;
+        }
+      }
+      if (reflected) continue;
+      if (Math.abs(b.x - boss.x) < boss.width / 2 &&
+          Math.abs(b.y - boss.y) < boss.height / 2) {
+        boss.hp--;
+        makeSparks(b.x, b.y);
+        playBoom();
+        b.dead = true;
+        if (boss.hp <= 0) {
+          makeExplosion(boss.x, boss.y, '#FF0000');
+          makeExplosion(boss.x + 22, boss.y - 20, '#FFD400');
+          makeExplosion(boss.x - 22, boss.y + 20, '#FF6A00');
+          playBoom();
+          score += boss.type === 'vader' ? 300
+                : boss.type === 'inquisitor' ? 150
+                : 75;
+          boss.dead = true;
+        }
+      }
+    }
+  }
+  bolts = bolts.filter(b => !b.dead);
+  bosses = bosses.filter(b => !b.dead);
+
+  if (waveActive && bosses.length === 0) {
+    waveActive = false;
+    vaderNextAt = score + VADER_REPEAT_GAP;
+  }
+
+  // Boss/enemy reaches player -> crash (or revive)
+  if (!lightspeedActive()) {
+    for (const boss of bosses) {
+      if (Math.abs(boss.x - player.x) < (boss.width + player.width) / 2 - 6 &&
+          boss.y + boss.height / 2 > player.y - player.height / 2 + 10) {
+        // If Kix will save us, take the boss out too so we don't re-crash instantly
+        if (medics.length > 0) {
+          makeExplosion(boss.x, boss.y, '#FF0000');
+          makeExplosion(boss.x + 22, boss.y - 20, '#FFD400');
+          score += boss.type === 'vader' ? 300
+                : boss.type === 'inquisitor' ? 150
+                : 75;
+          boss.dead = true;
+        }
+        tryCrashPlayer(boss.type);
+        break;
+      }
+    }
+    bosses = bosses.filter(b => !b.dead);
+  }
+
+  // Bolt vs enemy car (skip detonators — handled by explosion)
+  for (const b of bolts) {
+    if (b.hostile || b.detonator) continue;
+    for (const c of cars) {
+      if (Math.abs(b.x - c.x) < c.width / 2 && Math.abs(b.y - c.y) < c.height / 2) {
+        makeExplosion(c.x, c.y, c.color);
+        playBoom();
+        score += 25;
+        c.dead = true; b.dead = true;
+        break;
+      }
+    }
+  }
+  bolts = bolts.filter(b => !b.dead);
+  cars = cars.filter(c => !c.dead);
+
+  // Hostile bolt vs player
+  if (!lightspeedActive()) {
+    for (const b of bolts) {
+      if (!b.hostile) continue;
+      if (Math.abs(b.x - player.x) < player.width / 2 - 4 &&
+          Math.abs(b.y - player.y) < player.height / 2 - 8) {
+        b.dead = true;
+        tryCrashPlayer('reflected');
+      }
+    }
+    bolts = bolts.filter(b => !b.dead);
+  }
+
+  // Pickups
+  for (const a of ammoPickups) {
+    if (Math.abs(a.x - player.x) < 30 && Math.abs(a.y - player.y) < 45) {
+      player.ammo += AMMO_PER_PICKUP;
+      // Refill every wingman AND bring back any that were leaving because of empty ammo
+      for (const w of wingmen) {
+        w.ammo = w.maxAmmo;
+        w.leaving = false;
+      }
+      a.dead = true;
+      playPickup();
+    }
+  }
+  ammoPickups = ammoPickups.filter(a => !a.dead);
+
+  for (const p of portals) {
+    if (Math.abs(p.x - player.x) < 34 && Math.abs(p.y - player.y) < 48) {
+      lightspeedMilesLeft = LIGHTSPEED_MILES;
+      lightspeedAlertTimer = 90;
+      p.dead = true;
+      playPortal();
+    }
+  }
+  portals = portals.filter(p => !p.dead);
+
+  for (const p of rexPickups) {
+    if (Math.abs(p.x - player.x) < 34 && Math.abs(p.y - player.y) < 48) {
+      // Rex crates only appear when we don't already have Rex.
+      // Fill an empty slot, or promote a plain trooper if the squad is full.
+      if (!hasRexActive()) {
+        if (addWingman('rex') || replaceWingman('rex')) {
+          rexAlertTimer = 90;
+          playRexArrival();
+        }
+      }
+      p.dead = true;
+    }
+  }
+  rexPickups = rexPickups.filter(p => !p.dead);
+
+  for (const p of codyPickups) {
+    if (Math.abs(p.x - player.x) < 34 && Math.abs(p.y - player.y) < 48) {
+      if (!hasCodyActive()) {
+        if (addWingman('cody') || replaceWingman('cody')) {
+          codyAlertTimer = 90;
+          playCodyArrival();
+        }
+      }
+      p.dead = true;
+    }
+  }
+  codyPickups = codyPickups.filter(p => !p.dead);
+
+  for (const p of trooperPickups) {
+    if (Math.abs(p.x - player.x) < 34 && Math.abs(p.y - player.y) < 48) {
+      if (addWingman('trooper')) {
+        trooperAlertTimer = 60;
+        playTrooperArrival();
+      }
+      p.dead = true;
+    }
+  }
+  trooperPickups = trooperPickups.filter(p => !p.dead);
+
+  for (const p of kixPickups) {
+    if (Math.abs(p.x - player.x) < 34 && Math.abs(p.y - player.y) < 48) {
+      if (addKix()) {
+        kixAlertTimer = 70;
+        playKixArrival();
+      }
+      p.dead = true;
+    }
+  }
+  kixPickups = kixPickups.filter(p => !p.dead);
+
+  // Medics follow the player in their assigned back-slot
+  for (const m of medics) {
+    const s = MEDIC_SLOTS[m.slotIdx];
+    const desiredX = Math.max(30, Math.min(W - 30, player.x + s.dx));
+    const desiredY = Math.min(H - 30, player.y + s.dy);
+    m.x += (desiredX - m.x) * 0.12;
+    m.y += (desiredY - m.y) * 0.12;
+  }
+
+  // Wingman behavior
+  for (const w of wingmen) {
+    let desiredX = player.x + w.slot;
+    desiredX = Math.max(30, Math.min(W - 30, desiredX));
+    w.x += (desiredX - w.x) * 0.12;
+    w.y += ((player.y + 10) - w.y) * 0.12;
+
+    if (!w.leaving && !lightspeedActive() && w.ammo > 0) {
+      w.cooldown--;
+      if (w.cooldown <= 0) {
+        if (w.type === 'rex') {
+          bolts.push({ x: w.x - 16, y: w.y - 20, vx: 0, vy: -14, hostile: false, blue: true });
+          bolts.push({ x: w.x + 16, y: w.y - 20, vx: 0, vy: -14, hostile: false, blue: true });
+          w.ammo -= 2;
+          w.cooldown = REX_COOLDOWN;
+          playRexBlast();
+        } else if (w.type === 'cody') {
+          // Lobs a thermal detonator straight ahead (no random scatter)
+          bolts.push({
+            x: w.x, y: w.y - 20,
+            vx: 0,
+            vy: DETONATOR_INIT_VY,
+            hostile: false, blue: false,
+            detonator: true,
+            timer: DETONATOR_TIMER
+          });
+          w.ammo -= 1;
+          w.cooldown = CODY_COOLDOWN;
+          playDetonatorThrow();
+        } else {
+          bolts.push({ x: w.x, y: w.y - 20, vx: 0, vy: -14, hostile: false, blue: true });
+          w.ammo -= 1;
+          w.cooldown = TROOPER_COOLDOWN;
+          playTrooperBlast();
+        }
+        if (w.ammo <= 0) w.leaving = true;
+      }
+    }
+
+    if (w.leaving) {
+      w.y -= 5;
+      w.x += (w.slot > 0 ? 3 : -3);
+      if (w.y < -60) w.dead = true;
+    }
+  }
+  wingmen = wingmen.filter(w => !w.dead);
+
+  if (!lightspeedActive()) {
+    for (const c of cars) {
+      const dx = Math.abs(c.x - player.x);
+      const dy = Math.abs(c.y - player.y);
+      if (dx < (c.width + player.width) / 2 - 12 && dy < (c.height + player.height) / 2 - 16) {
+        makeExplosion(c.x, c.y, c.color);
+        c.dead = true;
+        tryCrashPlayer('car');
+      }
+    }
+    cars = cars.filter(c => !c.dead);
+  }
+}
+
+// -------------------- Draw --------------------
+function draw() {
+  drawTrack();
+
+  if (lightspeedActive()) drawLightspeedOverlay();
+
+  for (const a of ammoPickups) drawAmmoPickup(a);
+  for (const p of portals) drawPortal(p);
+  for (const p of trooperPickups) drawTrooperPickup(p);
+  for (const p of rexPickups) drawRexPickup(p);
+  for (const p of codyPickups) drawCodyPickup(p);
+  for (const p of kixPickups) drawKixPickup(p);
+  for (const c of cars) drawCar(c.x, c.y, c.width, c.height, c.color);
+  for (const boss of bosses) drawBoss(boss);
+  for (const b of bolts) drawBolt(b);
+
+  // Medics fly BEHIND the player
+  for (const m of medics) drawKix(m);
+
+  if (state === 'playing' || state === 'crashed' || state === 'paused' || state === 'reviving') {
+    drawPlayerCar(player.x, player.y, player.width, player.height, player.color);
+  }
+  for (const w of wingmen) drawWingman(w);
+
+  // Green pulsing shield during medpack revive
+  if (reviveInvincible > 0) {
+    const pulse = 0.35 + Math.sin(performance.now() * 0.02) * 0.25;
+    ctx.strokeStyle = `rgba(60, 255, 110, ${pulse})`;
+    ctx.lineWidth = 4;
+    ctx.strokeRect(
+      player.x - player.width / 2 - 6,
+      player.y - player.height / 2 - 6,
+      player.width + 12, player.height + 12
+    );
+  }
+
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(0, p.life / 45);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+
+  if (flashTimer > 0) {
+    ctx.fillStyle = `rgba(255, 255, 255, ${flashTimer / 20 * 0.6})`;
+    ctx.fillRect(0, 0, W, H);
+    flashTimer--;
+  }
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.fillRect(0, 0, W, 46);
+  ctx.fillStyle = '#FFF';
+  ctx.font = 'bold 22px -apple-system, Arial';
+  ctx.textAlign = 'left';
+  ctx.fillText('Score: ' + score, 16, 30);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = player.ammo > 0 ? '#FFD400' : '#FF4444';
+  ctx.fillText('Ammo: ' + player.ammo, (W / 2) - 20, 30);
+  if (state === 'playing' || state === 'paused') drawPauseButton();
+
+  let statusY = 66;
+  ctx.font = 'bold 16px -apple-system, Arial';
+  ctx.textAlign = 'center';
+  if (lightspeedActive()) {
+    ctx.fillStyle = '#88DDFF';
+    ctx.fillText('LIGHTSPEED  ' + Math.max(0, lightspeedMilesLeft) + ' mi', W / 2, statusY);
+    statusY += 22;
+  }
+  const rexCount = wingmen.filter(w => w.type === 'rex' && !w.leaving).length;
+  const codyCount = wingmen.filter(w => w.type === 'cody' && !w.leaving).length;
+  const trooperCount = wingmen.filter(w => (w.type === 'trooper' || w.type === 'trooper-blue' || w.type === 'trooper-orange') && !w.leaving).length;
+  if (rexCount || codyCount || trooperCount) {
+    const parts = [];
+    if (rexCount) parts.push('REX');
+    if (codyCount) parts.push('CODY');
+    if (trooperCount) parts.push(trooperCount + ' TROOPER' + (trooperCount > 1 ? 'S' : ''));
+    ctx.fillStyle = '#88BBFF';
+    ctx.fillText('Wingmen: ' + parts.join(' + '), W / 2, statusY);
+    statusY += 22;
+  }
+  if (medics.length > 0) {
+    ctx.fillStyle = '#33FF77';
+    ctx.fillText('KIX MEDPACKS: ' + medics.length, W / 2, statusY);
+    statusY += 22;
+  }
+  if (waveActive && bosses.length > 0) {
+    ctx.fillStyle = '#FF6A6A';
+    ctx.fillText('WAVE ' + bossWave, W / 2, statusY);
+  }
+
+  if (vaderAlertTimer > 0 && state === 'playing') {
+    const alpha = Math.min(1, vaderAlertTimer / 40);
+    ctx.fillStyle = `rgba(0, 0, 0, ${0.6 * alpha})`;
+    ctx.fillRect(0, 200, W, 100);
+    ctx.fillStyle = `rgba(255, 30, 30, ${alpha})`;
+    ctx.textAlign = 'center';
+    const cycle = (bossWave - 1) % 7;
+    let title, subtitle, fontSize;
+    switch (cycle) {
+      case 0: title = 'STORMTROOPER!'; subtitle = 'He shoots back!'; fontSize = 34; break;
+      case 1: title = '2 STORMTROOPERS!'; subtitle = 'Watch their fire!'; fontSize = 30; break;
+      case 2: title = 'DARTH VADER!'; subtitle = 'His saber swirls — time your shots!'; fontSize = 38; break;
+      case 3: title = 'VADER + 2 STORMTROOPERS!'; subtitle = 'Dodge blasters AND the saber!'; fontSize = 22; break;
+      case 4: title = 'VADER + INQUISITOR!'; subtitle = 'The double-blade spins both ways!'; fontSize = 30; break;
+      case 5: title = 'VADER + 2 INQUISITORS!'; subtitle = 'This is the way of the dark side!'; fontSize = 26; break;
+      default: title = 'FULL DARK SIDE!'; subtitle = 'Vader + 2 Inquisitors + 2 Stormtroopers'; fontSize = 24;
+    }
+    ctx.font = 'bold ' + fontSize + 'px -apple-system, Arial';
+    ctx.fillText(title, W / 2, 245);
+    ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+    ctx.font = 'bold 16px -apple-system, Arial';
+    ctx.fillText(subtitle, W / 2, 275);
+  }
+  if (lightspeedAlertTimer > 0 && state === 'playing') {
+    const alpha = Math.min(1, lightspeedAlertTimer / 30);
+    ctx.fillStyle = `rgba(100, 200, 255, ${alpha})`;
+    ctx.font = 'bold 42px -apple-system, Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('LIGHTSPEED!', W / 2, 320);
+  }
+  if (rexAlertTimer > 0 && state === 'playing') {
+    const alpha = Math.min(1, rexAlertTimer / 30);
+    ctx.fillStyle = `rgba(140, 180, 255, ${alpha})`;
+    ctx.font = 'bold 38px -apple-system, Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('CAPTAIN REX!', W / 2, 380);
+    ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+    ctx.font = 'bold 16px -apple-system, Arial';
+    ctx.fillText('Twin blasters — this is the way we do it.', W / 2, 405);
+  }
+  if (codyAlertTimer > 0 && state === 'playing') {
+    const alpha = Math.min(1, codyAlertTimer / 30);
+    ctx.fillStyle = `rgba(255, 175, 60, ${alpha})`;
+    ctx.font = 'bold 38px -apple-system, Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('COMMANDER CODY!', W / 2, 440);
+    ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+    ctx.font = 'bold 16px -apple-system, Arial';
+    ctx.fillText('Thermal detonators inbound — take cover!', W / 2, 465);
+  }
+  if (trooperAlertTimer > 0 && state === 'playing') {
+    const alpha = Math.min(1, trooperAlertTimer / 20);
+    ctx.fillStyle = `rgba(230, 230, 230, ${alpha})`;
+    ctx.font = 'bold 22px -apple-system, Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('CLONE TROOPER!', W / 2, 500);
+  }
+  if (kixAlertTimer > 0 && state === 'playing') {
+    const alpha = Math.min(1, kixAlertTimer / 30);
+    ctx.fillStyle = `rgba(80, 220, 130, ${alpha})`;
+    ctx.font = 'bold 34px -apple-system, Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('KIX MEDIC!', W / 2, 540);
+    ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+    ctx.font = 'bold 15px -apple-system, Arial';
+    ctx.fillText('One revive stored — takes a hit for you.', W / 2, 562);
+  }
+  if (state === 'reviving') {
+    // Dim the frozen scene
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.fillRect(0, 0, W, H);
+
+    // Draw the arriving Kix on top
+    if (reviveMedic) drawKix(reviveMedic);
+
+    ctx.textAlign = 'center';
+    if (reviveStage === 0) {
+      const pulse = 0.75 + Math.sin(performance.now() * 0.025) * 0.25;
+      // CRASH! big red sign
+      ctx.fillStyle = `rgba(0, 0, 0, ${0.75 * pulse})`;
+      roundRect(W / 2 - 180, H / 2 - 70, 360, 130, 12, true);
+      ctx.strokeStyle = `rgba(255, 60, 60, ${pulse})`;
+      ctx.lineWidth = 6;
+      ctx.strokeRect(W / 2 - 180, H / 2 - 70, 360, 130);
+      ctx.fillStyle = `rgba(255, 50, 50, ${pulse})`;
+      ctx.font = 'bold 84px -apple-system, Arial';
+      ctx.fillText('CRASH!', W / 2, H / 2 + 18);
+    } else if (reviveStage === 1) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      roundRect(W / 2 - 170, H / 2 - 220, 340, 60, 10, true);
+      ctx.fillStyle = '#FFF';
+      ctx.font = 'bold 26px -apple-system, Arial';
+      ctx.fillText('KIX INCOMING!', W / 2, H / 2 - 183);
+    } else if (reviveStage === 2) {
+      const pulse = 0.75 + Math.sin(performance.now() * 0.03) * 0.25;
+      ctx.fillStyle = `rgba(0, 0, 0, ${0.75 * pulse})`;
+      roundRect(W / 2 - 210, H / 2 - 70, 420, 130, 12, true);
+      ctx.strokeStyle = `rgba(80, 255, 130, ${pulse})`;
+      ctx.lineWidth = 6;
+      ctx.strokeRect(W / 2 - 210, H / 2 - 70, 420, 130);
+      ctx.fillStyle = `rgba(90, 255, 130, ${pulse})`;
+      ctx.font = 'bold 62px -apple-system, Arial';
+      ctx.fillText('ALL BETTER!', W / 2, H / 2 + 15);
+    }
+  }
+
+  if (state === 'menu') {
+    drawPanel();
+    // Logo across the top
+    drawGameLogo(W / 2, H / 2 - 160, 2);
+
+    // CONTROLS block
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#FF6A00';
+    ctx.font = 'bold 16px -apple-system, Arial';
+    ctx.fillText('— CONTROLS —', W / 2, H / 2 - 60);
+    ctx.fillStyle = '#FFF';
+    ctx.font = 'bold 16px -apple-system, Arial';
+    if (isTouchDevice) {
+      ctx.fillText('Swipe left / right to steer', W / 2, H / 2 - 38);
+      ctx.fillText('Tap with a 2nd finger to shoot', W / 2, H / 2 - 18);
+      ctx.fillText('Tap ‖ top-right to pause', W / 2, H / 2 + 2);
+    } else {
+      ctx.fillText('←  →  arrow keys to steer', W / 2, H / 2 - 38);
+      ctx.fillText('SPACE to shoot the blaster', W / 2, H / 2 - 18);
+      ctx.fillText('ESC to pause', W / 2, H / 2 + 2);
+    }
+
+    // POWER-UPS block
+    ctx.fillStyle = '#FF6A00';
+    ctx.font = 'bold 16px -apple-system, Arial';
+    ctx.fillText('— POWER-UPS —', W / 2, H / 2 + 30);
+    ctx.font = 'bold 13px -apple-system, Arial';
+    ctx.fillStyle = '#FFD400';
+    ctx.fillText('yellow AMMO — refills you + squad', W / 2, H / 2 + 50);
+    ctx.fillStyle = '#88DDFF';
+    ctx.fillText('blue PORTAL — lightspeed 500 mi', W / 2, H / 2 + 68);
+    ctx.fillStyle = REX_BLUE;
+    ctx.fillText('REX — twin blasters, 2× fire', W / 2, H / 2 + 86);
+    ctx.fillStyle = CODY_ORANGE;
+    ctx.fillText('CODY — thermal detonators', W / 2, H / 2 + 104);
+    ctx.fillStyle = '#33FF77';
+    ctx.fillText('KIX — medic, 1 revive each', W / 2, H / 2 + 122);
+
+    ctx.fillStyle = '#00E5C7';
+    ctx.font = 'bold 22px -apple-system, Arial';
+    ctx.fillText(isTouchDevice ? 'TAP TO START' : 'PRESS ANY ARROW TO START', W / 2, H / 2 + 170);
+  }
+
+  if (state === 'paused') {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.78)';
+    ctx.fillRect(0, 0, W, H);
+    // Logo at top
+    drawGameLogo(W / 2, 110, 1.44);
+    // PAUSED
+    ctx.fillStyle = '#FFD400';
+    ctx.font = 'bold 68px -apple-system, Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('PAUSED', W / 2, H / 2 - 20);
+    // Resume button
+    BTN_RESUME.y = H / 2 + 30;
+    drawButton(BTN_RESUME, 'RESUME ▶', '#00E5C7');
+    ctx.fillStyle = '#AAA';
+    ctx.font = 'bold 14px -apple-system, Arial';
+    ctx.fillText(isTouchDevice ? 'or tap anywhere' : 'or press ESC', W / 2, H / 2 + 100);
+  }
+
+  if (state === 'crashed') {
+    drawPanel();
+    // Logo across the top
+    drawGameLogo(W / 2, H / 2 - 180, 1.4);
+
+    ctx.fillStyle = '#FF3333';
+    ctx.font = 'bold 40px -apple-system, Arial';
+    ctx.textAlign = 'center';
+    let title = 'CRASH!';
+    if (crashCause === 'vader') title = 'VADER WINS!';
+    else if (crashCause === 'inquisitor') title = 'INQUISITOR WINS!';
+    else if (crashCause === 'stormtrooper') title = 'STORMTROOPER WINS!';
+    else if (crashCause === 'reflected') title = 'DEFLECTED!';
+    ctx.fillText(title, W / 2, H / 2 - 85);
+    ctx.fillStyle = '#FFF';
+    ctx.font = 'bold 22px -apple-system, Arial';
+    ctx.fillText('Your score: ' + score, W / 2, H / 2 - 50);
+    if (score === bestScore && score > 0) {
+      ctx.fillStyle = '#FFD400';
+      ctx.font = 'bold 18px -apple-system, Arial';
+      ctx.fillText('NEW BEST!', W / 2, H / 2 - 26);
+    }
+
+    // Leaderboard
+    ctx.fillStyle = '#FFD400';
+    ctx.font = 'bold 18px -apple-system, Arial';
+    ctx.fillText('★ HIGH SCORES ★', W / 2, H / 2 - 2);
+    ctx.font = 'bold 15px monospace';
+    if (leaderboard.length === 0) {
+      ctx.fillStyle = '#AAA';
+      ctx.fillText('(no scores yet)', W / 2, H / 2 + 26);
+    } else {
+      for (let i = 0; i < leaderboard.length; i++) {
+        const e = leaderboard[i];
+        const highlight = (i === lastAddedRank);
+        ctx.fillStyle = highlight ? '#00E5C7' : (i === 0 ? '#FFD400' : (i < 3 ? '#FFF' : '#AAA'));
+        const rank = String(i + 1).padStart(2, ' ') + '.';
+        const nm = e.name.padEnd(10, ' ');
+        const sc = String(e.score).padStart(5, ' ');
+        ctx.fillText(`${rank} ${nm} ${sc}`, W / 2, H / 2 + 22 + i * 20);
+      }
+    }
+
+    ctx.fillStyle = '#00E5C7';
+    ctx.font = 'bold 20px -apple-system, Arial';
+    ctx.fillText(isTouchDevice ? 'Tap to race again' : 'Press any arrow to race again', W / 2, H / 2 + 200);
+  }
+
+  // (compact leaderboard removed from menu — full leaderboard is on the crash screen)
+
+  // Name entry overlay (HTML input handles the actual typing)
+  if (enteringName) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#FFD400';
+    ctx.font = 'bold 44px -apple-system, Arial';
+    ctx.fillText('HIGH SCORE!', W / 2, H / 2 - 130);
+    ctx.fillStyle = '#00E5C7';
+    ctx.font = 'bold 24px -apple-system, Arial';
+    ctx.fillText('Score: ' + entryScore, W / 2, H / 2 - 90);
+
+    ctx.fillStyle = '#DDDDDD';
+    ctx.font = 'bold 15px -apple-system, Arial';
+    ctx.fillText('Type your name — ENTER to save', W / 2, H / 2 + 60);
+
+    // SKIP button
+    BTN_SKIP.y = H / 2 + 90;
+    drawButton(BTN_SKIP, 'SKIP', '#AAA');
+    ctx.fillStyle = '#888';
+    ctx.font = 'bold 13px -apple-system, Arial';
+    ctx.fillText(isTouchDevice ? '(or tap outside)' : '(or press ESC)', W / 2, H / 2 + 156);
+  }
+}
+
+function drawPanel() {
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.86)';
+  roundRect(20, H / 2 - 240, W - 40, 480, 16, true);
+  ctx.strokeStyle = '#FF6A00';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(20, H / 2 - 240, W - 40, 480);
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
