@@ -115,6 +115,10 @@ const INQUISITOR_SABER_LEN = 52;
 const STORMTROOPER_HP = 1;
 const STORMTROOPER_SHOOT_MIN = 70;
 const STORMTROOPER_SHOOT_JITTER = 60;
+const SIDIOUS_HP = 8;
+const SIDIOUS_LIGHTNING_MIN = 30;
+const SIDIOUS_LIGHTNING_JITTER = 22;
+const SIDIOUS_LIGHTNING_SPEED = 8.5;
 const SABER_ROT = 0.025;
 const BOSS_DESCENT = 0.22;
 const SABER_HIT_R = 12;
@@ -332,6 +336,7 @@ function playDetonatorThrow(){ tone('triangle', 400, 200, 0.20, 0.08); }
 function playPickup()       { tone('sine', 660, 1320, 0.15, 0.2); }
 function playEmpty()        { tone('square', 180, 180, 0.08, 0.06); }
 function playSaberClash()   { tone('square', 1400, 500, 0.13, 0.18); }
+function playLightning()    { tone('sawtooth', 1600, 220, 0.22, 0.11); }
 function playPortal()       { tone('sine', 220, 1760, 0.5, 0.15); }
 function playBoom() {
   if (!audioCtx) return;
@@ -793,6 +798,7 @@ function drawPlayerCar(x, y, w, h, color) {
 
 function drawBolt(b) {
   if (b.detonator) { drawDetonator(b); return; }
+  if (b.lightning) { drawLightningBall(b); return; }
   const glow = 'rgba(80,160,255,0.55)';
   const core = '#2E7BFF';
   const hot  = '#CCEEFF';
@@ -802,6 +808,42 @@ function drawBolt(b) {
   roundRect(b.x - 3, b.y - 12, 6, 24, 3, true);
   ctx.fillStyle = hot;
   roundRect(b.x - 1.5, b.y - 10, 3, 20, 1.5, true);
+}
+
+function drawLightningBall(b) {
+  const pulse = 0.6 + 0.4 * Math.sin(performance.now() / 40);
+  // Outer glow
+  ctx.fillStyle = `rgba(180, 120, 255, ${0.35 * pulse})`;
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, 16, 0, Math.PI * 2);
+  ctx.fill();
+  // Mid halo
+  ctx.fillStyle = 'rgba(210, 170, 255, 0.55)';
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, 10, 0, Math.PI * 2);
+  ctx.fill();
+  // Bright core
+  ctx.fillStyle = '#F0E0FF';
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, 5, 0, Math.PI * 2);
+  ctx.fill();
+  // Jagged electric arcs
+  ctx.strokeStyle = 'rgba(240, 220, 255, 0.9)';
+  ctx.lineWidth = 1.5;
+  for (let s = 0; s < 4; s++) {
+    const a0 = Math.random() * Math.PI * 2;
+    let px = b.x + Math.cos(a0) * 4;
+    let py = b.y + Math.sin(a0) * 4;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    for (let i = 0; i < 3; i++) {
+      const a = a0 + (Math.random() - 0.5) * 1.2;
+      px += Math.cos(a) * (5 + Math.random() * 4);
+      py += Math.sin(a) * (5 + Math.random() * 4);
+      ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  }
 }
 
 function drawDetonator(b) {
@@ -1414,6 +1456,115 @@ function drawInquisitor(v) {
   drawHpBar(cx, cy - h / 2 - 20, 70, v.hp, v.maxHp);
 }
 
+function drawSidious(v) {
+  const cx = v.x, cy = v.y;
+  const w = v.width, h = v.height;
+
+  // Outer black robe silhouette (wide at bottom, hood on top)
+  ctx.fillStyle = '#0a0a0a';
+  ctx.beginPath();
+  ctx.moveTo(cx - w / 2 + 4, cy - h / 2 + 18);
+  ctx.quadraticCurveTo(cx - w / 2 - 14, cy + h / 2, cx - w / 2 - 10, cy + h / 2 + 12);
+  ctx.lineTo(cx + w / 2 + 10, cy + h / 2 + 12);
+  ctx.quadraticCurveTo(cx + w / 2 + 14, cy + h / 2, cx + w / 2 - 4, cy - h / 2 + 18);
+  ctx.closePath();
+  ctx.fill();
+
+  // Hood peak
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.moveTo(cx - w / 2 + 6, cy - h / 2 + 22);
+  ctx.quadraticCurveTo(cx, cy - h / 2 - 18, cx + w / 2 - 6, cy - h / 2 + 22);
+  ctx.lineTo(cx + w / 2 - 12, cy - h / 2 + 26);
+  ctx.quadraticCurveTo(cx, cy - h / 2 + 8, cx - w / 2 + 12, cy - h / 2 + 26);
+  ctx.closePath();
+  ctx.fill();
+
+  // Shadowed face inside hood
+  ctx.fillStyle = '#3a2e28';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - h / 2 + 22, 14, 16, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Pale, wrinkled face
+  ctx.fillStyle = '#c4b8a4';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - h / 2 + 22, 11, 13, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Wrinkle shadows
+  ctx.strokeStyle = 'rgba(50,30,20,0.55)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx - 8, cy - h / 2 + 26);
+  ctx.lineTo(cx - 3, cy - h / 2 + 28);
+  ctx.moveTo(cx + 3, cy - h / 2 + 28);
+  ctx.lineTo(cx + 8, cy - h / 2 + 26);
+  ctx.stroke();
+
+  // Sunken yellow eyes
+  ctx.fillStyle = '#000';
+  ctx.fillRect(cx - 6, cy - h / 2 + 20, 5, 3);
+  ctx.fillRect(cx + 1, cy - h / 2 + 20, 5, 3);
+  ctx.fillStyle = '#FFD400';
+  ctx.fillRect(cx - 5, cy - h / 2 + 21, 3, 1);
+  ctx.fillRect(cx + 2, cy - h / 2 + 21, 3, 1);
+
+  // Snarled mouth
+  ctx.fillStyle = '#2a1a12';
+  ctx.fillRect(cx - 4, cy - h / 2 + 28, 8, 2);
+
+  // Robe folds
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.moveTo(cx - 8, cy - h / 2 + 34);
+  ctx.lineTo(cx - 2, cy + h / 2 + 6);
+  ctx.lineTo(cx + 4, cy + h / 2 + 6);
+  ctx.lineTo(cx + 10, cy - h / 2 + 34);
+  ctx.closePath();
+  ctx.fill();
+
+  // Arms outstretched — bony hands casting
+  const casting = v.castTimer > 0;
+  const armY = cy - 2;
+  ctx.strokeStyle = '#0a0a0a';
+  ctx.lineWidth = 10;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - 10, cy - h / 2 + 34);
+  ctx.lineTo(cx - w / 2 - 6, armY);
+  ctx.moveTo(cx + 10, cy - h / 2 + 34);
+  ctx.lineTo(cx + w / 2 + 6, armY);
+  ctx.stroke();
+
+  // Pale hands
+  ctx.fillStyle = '#c4b8a4';
+  ctx.beginPath();
+  ctx.arc(cx - w / 2 - 6, armY, 5, 0, Math.PI * 2);
+  ctx.arc(cx + w / 2 + 6, armY, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Crackling energy between fingertips while casting
+  if (casting) {
+    ctx.strokeStyle = 'rgba(200, 160, 255, 0.9)';
+    ctx.lineWidth = 1.5;
+    for (let side = -1; side <= 1; side += 2) {
+      const hx = cx + side * (w / 2 + 6);
+      let px = hx, py = armY;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      for (let i = 0; i < 4; i++) {
+        px += (Math.random() - 0.5) * 12;
+        py += 6 + Math.random() * 4;
+        ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+  }
+
+  drawHpBar(cx, cy - h / 2 - 24, 84, v.hp, v.maxHp);
+}
+
 function drawEnemyStormtrooper(v) {
   const cx = v.x, cy = v.y;
   const w = v.width, h = v.height;
@@ -1467,6 +1618,7 @@ function drawEnemyStormtrooper(v) {
 function drawBoss(boss) {
   if (boss.type === 'vader') drawVader(boss);
   else if (boss.type === 'inquisitor') drawInquisitor(boss);
+  else if (boss.type === 'sidious') drawSidious(boss);
   else if (boss.type === 'stormtrooper') drawEnemyStormtrooper(boss);
 }
 
@@ -1705,6 +1857,16 @@ function makeBoss(type, x) {
       moveTimer: 90, entering: true
     };
   }
+  if (type === 'sidious') {
+    return {
+      type: 'sidious', x, y: -80, targetX: x,
+      width: 62, height: 86,
+      hp: SIDIOUS_HP, maxHp: SIDIOUS_HP,
+      lightningCooldown: SIDIOUS_LIGHTNING_MIN + Math.random() * SIDIOUS_LIGHTNING_JITTER,
+      castTimer: 0,
+      moveTimer: 75, entering: true
+    };
+  }
   return {
     type: 'inquisitor', x, y: -80, targetX: x,
     width: 58, height: 82,
@@ -1725,7 +1887,7 @@ function makeStormtrooper(x) {
 }
 function spawnBossWave() {
   bossWave++;
-  const cycle = (bossWave - 1) % 7;
+  const cycle = (bossWave - 1) % 9;
   const cx = W / 2;
   switch (cycle) {
     case 0:
@@ -1739,20 +1901,27 @@ function spawnBossWave() {
       bosses.push(makeBoss('vader', cx));
       break;
     case 3:
+      bosses.push(makeBoss('sidious', cx));
+      break;
+    case 4:
       bosses.push(makeBoss('vader', cx));
       bosses.push(makeStormtrooper(W * 0.2));
       bosses.push(makeStormtrooper(W * 0.8));
       break;
-    case 4:
+    case 5:
       bosses.push(makeBoss('vader', cx - 75));
       bosses.push(makeBoss('inquisitor', cx + 75));
       break;
-    case 5:
+    case 6:
       bosses.push(makeBoss('vader', cx));
       bosses.push(makeBoss('inquisitor', W * 0.22));
       bosses.push(makeBoss('inquisitor', W * 0.78));
       break;
-    case 6:
+    case 7:
+      bosses.push(makeBoss('sidious', cx - 75));
+      bosses.push(makeBoss('vader', cx + 75));
+      break;
+    case 8:
       bosses.push(makeBoss('vader', cx));
       bosses.push(makeBoss('inquisitor', W * 0.22));
       bosses.push(makeBoss('inquisitor', W * 0.78));
@@ -2122,7 +2291,7 @@ function update() {
       b.x += (b.targetX - b.x) * 0.045;
       if (!lightspeedActive()) b.y += BOSS_DESCENT;
     }
-    if (b.type !== 'stormtrooper') b.saberAngle += SABER_ROT;
+    if (b.type !== 'stormtrooper' && b.type !== 'sidious') b.saberAngle += SABER_ROT;
 
     // Stormtroopers periodically fire straight down (they can't turn)
     if (b.type === 'stormtrooper' && !b.entering && !lightspeedActive()) {
@@ -2138,13 +2307,35 @@ function update() {
       }
     }
 
+    // Sidious hurls lightning balls aimed at the player
+    if (b.type === 'sidious' && !b.entering && !lightspeedActive()) {
+      if (b.castTimer > 0) b.castTimer--;
+      b.lightningCooldown--;
+      if (b.lightningCooldown <= 0) {
+        const originY = b.y + 4;
+        const dx = player.x - b.x;
+        const dy = Math.max(player.y - originY, 40);
+        const dist = Math.hypot(dx, dy) || 1;
+        const vx = (dx / dist) * SIDIOUS_LIGHTNING_SPEED;
+        const vy = (dy / dist) * SIDIOUS_LIGHTNING_SPEED;
+        bolts.push({
+          x: b.x, y: originY,
+          vx, vy,
+          hostile: true, lightning: true
+        });
+        playLightning();
+        b.castTimer = 18;
+        b.lightningCooldown = SIDIOUS_LIGHTNING_MIN + Math.random() * SIDIOUS_LIGHTNING_JITTER;
+      }
+    }
+
     if (lightspeedActive()) b.y += speed * 0.6;
   }
   bosses = bosses.filter(b => b.y <= H + 60);
 
-  // Bolt vs bosses (skip detonators + hostile bolts + skip saber for stormtrooper)
+  // Bolt vs bosses (skip detonators + hostile bolts + skip saber for stormtrooper/sidious)
   for (const boss of bosses) {
-    const segs = boss.type !== 'stormtrooper' ? bossSaberSegments(boss) : [];
+    const segs = (boss.type !== 'stormtrooper' && boss.type !== 'sidious') ? bossSaberSegments(boss) : [];
     for (const b of bolts) {
       if (b.dead || b.hostile || b.detonator) continue;
       let reflected = false;
@@ -2172,7 +2363,8 @@ function update() {
           makeExplosion(boss.x + 22, boss.y - 20, '#FFD400');
           makeExplosion(boss.x - 22, boss.y + 20, '#FF6A00');
           playBoom();
-          score += boss.type === 'vader' ? 300
+          score += boss.type === 'sidious' ? 400
+                : boss.type === 'vader' ? 300
                 : boss.type === 'inquisitor' ? 150
                 : 75;
           boss.dead = true;
@@ -2197,7 +2389,8 @@ function update() {
         if (medics.length > 0) {
           makeExplosion(boss.x, boss.y, '#FF0000');
           makeExplosion(boss.x + 22, boss.y - 20, '#FFD400');
-          score += boss.type === 'vader' ? 300
+          score += boss.type === 'sidious' ? 400
+                : boss.type === 'vader' ? 300
                 : boss.type === 'inquisitor' ? 150
                 : 75;
           boss.dead = true;
@@ -2479,15 +2672,17 @@ function draw() {
     ctx.fillRect(0, 200, W, 100);
     ctx.fillStyle = `rgba(255, 30, 30, ${alpha})`;
     ctx.textAlign = 'center';
-    const cycle = (bossWave - 1) % 7;
+    const cycle = (bossWave - 1) % 9;
     let title, subtitle, fontSize;
     switch (cycle) {
       case 0: title = 'STORMTROOPER!'; subtitle = 'He shoots back!'; fontSize = 34; break;
       case 1: title = '2 STORMTROOPERS!'; subtitle = 'Watch their fire!'; fontSize = 30; break;
       case 2: title = 'DARTH VADER!'; subtitle = 'His saber swirls — time your shots!'; fontSize = 38; break;
-      case 3: title = 'VADER + 2 STORMTROOPERS!'; subtitle = 'Dodge blasters AND the saber!'; fontSize = 22; break;
-      case 4: title = 'VADER + INQUISITOR!'; subtitle = 'The double-blade spins both ways!'; fontSize = 30; break;
-      case 5: title = 'VADER + 2 INQUISITORS!'; subtitle = 'This is the way of the dark side!'; fontSize = 26; break;
+      case 3: title = 'DARTH SIDIOUS!'; subtitle = 'Unlimited power — dodge the lightning!'; fontSize = 32; break;
+      case 4: title = 'VADER + 2 STORMTROOPERS!'; subtitle = 'Dodge blasters AND the saber!'; fontSize = 22; break;
+      case 5: title = 'VADER + INQUISITOR!'; subtitle = 'The double-blade spins both ways!'; fontSize = 30; break;
+      case 6: title = 'VADER + 2 INQUISITORS!'; subtitle = 'This is the way of the dark side!'; fontSize = 26; break;
+      case 7: title = 'SIDIOUS + VADER!'; subtitle = 'Master and apprentice — lightning + saber!'; fontSize = 24; break;
       default: title = 'FULL DARK SIDE!'; subtitle = 'Vader + 2 Inquisitors + 2 Stormtroopers'; fontSize = 24;
     }
     ctx.font = 'bold ' + fontSize + 'px -apple-system, Arial';
@@ -2650,6 +2845,7 @@ function draw() {
     ctx.textAlign = 'center';
     let title = 'CRASH!';
     if (crashCause === 'vader') title = 'VADER WINS!';
+    else if (crashCause === 'sidious') title = 'SIDIOUS WINS!';
     else if (crashCause === 'inquisitor') title = 'INQUISITOR WINS!';
     else if (crashCause === 'stormtrooper') title = 'STORMTROOPER WINS!';
     else if (crashCause === 'reflected') title = 'DEFLECTED!';
