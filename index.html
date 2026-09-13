@@ -147,7 +147,7 @@ let crashCause = 'car';
 let score = 0;
 let bestScore = Number(localStorage.getItem('sonnyBest') || 0);
 
-// Leaderboard — persisted top scores with names
+// Leaderboard — persisted top scores with names (global via /api/scores, local fallback)
 const LEADERBOARD_SIZE = 8;
 let leaderboard = [];
 try { leaderboard = JSON.parse(localStorage.getItem('sonnyLeaderboard') || '[]'); }
@@ -156,23 +156,54 @@ let enteringName = false;
 let entryName = '';
 let entryScore = 0;
 let lastAddedRank = -1;
+let leaderboardSyncing = false;
+
+function applyLeaderboard(list) {
+  if (!Array.isArray(list)) return;
+  leaderboard = list.slice(0, LEADERBOARD_SIZE);
+  try { localStorage.setItem('sonnyLeaderboard', JSON.stringify(leaderboard)); }
+  catch (e) {}
+}
+
+async function fetchRemoteLeaderboard() {
+  try {
+    const res = await fetch('/api/scores', { cache: 'no-store' });
+    if (!res.ok) return;
+    const list = await res.json();
+    applyLeaderboard(list);
+  } catch (e) { /* offline — keep local */ }
+}
 
 function checkLeaderboardQualifies(s) {
   if (s <= 0) return false;
   if (leaderboard.length < LEADERBOARD_SIZE) return true;
   return s > leaderboard[leaderboard.length - 1].score;
 }
-function commitLeaderboardEntry() {
+async function commitLeaderboardEntry() {
   const raw = (nameInput.value || entryName).trim();
   const name = (raw || 'PLAYER').slice(0, 10).toUpperCase();
   const entry = { name, score: entryScore };
-  leaderboard.push(entry);
-  leaderboard.sort((a, b) => b.score - a.score);
-  leaderboard = leaderboard.slice(0, LEADERBOARD_SIZE);
-  lastAddedRank = leaderboard.indexOf(entry);
-  try { localStorage.setItem('sonnyLeaderboard', JSON.stringify(leaderboard)); }
-  catch (e) {}
+
+  // Optimistic local update so the UI reflects the entry immediately
+  const optimistic = leaderboard.concat([entry]).sort((a, b) => b.score - a.score);
+  applyLeaderboard(optimistic);
+  lastAddedRank = leaderboard.findIndex(e => e.name === entry.name && e.score === entry.score);
   hideNameEntry();
+
+  leaderboardSyncing = true;
+  try {
+    const res = await fetch('/api/scores', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, score: entryScore })
+    });
+    if (res.ok) {
+      const list = await res.json();
+      applyLeaderboard(list);
+      lastAddedRank = leaderboard.findIndex(e => e.name === name && e.score === entryScore);
+    }
+  } catch (e) { /* offline — local copy already updated */ }
+  finally { leaderboardSyncing = false; }
 }
 function showNameEntry() {
   enteringName = true;
@@ -752,9 +783,9 @@ function drawPlayerCar(x, y, w, h, color) {
 
 function drawBolt(b) {
   if (b.detonator) { drawDetonator(b); return; }
-  const glow = b.hostile ? 'rgba(255,30,30,0.5)' : (b.blue ? 'rgba(80,160,255,0.45)' : 'rgba(255,80,20,0.4)');
-  const core = b.hostile ? '#FF1010' : (b.blue ? '#3388FF' : '#FF3300');
-  const hot  = b.hostile ? '#FFCCCC' : (b.blue ? '#CCEEFF' : '#FFEE99');
+  const glow = 'rgba(80,160,255,0.55)';
+  const core = '#2E7BFF';
+  const hot  = '#CCEEFF';
   ctx.fillStyle = glow;
   roundRect(b.x - 6, b.y - 14, 12, 28, 6, true);
   ctx.fillStyle = core;
@@ -1805,6 +1836,7 @@ function tryCrashPlayer(cause) {
     entryScore = score;
     showNameEntry();
   }
+  fetchRemoteLeaderboard();
 }
 
 function updateRevive() {
@@ -2686,6 +2718,7 @@ function loop() {
   draw();
   requestAnimationFrame(loop);
 }
+fetchRemoteLeaderboard();
 loop();
 </script>
 </body>
