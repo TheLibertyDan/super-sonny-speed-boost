@@ -232,8 +232,18 @@ nameInput.addEventListener('input', () => {
   nameInput.value = entryName;
 });
 nameInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); commitLeaderboardEntry(); return; }
-  if (e.key === 'Escape' || e.key === 'Esc') { e.preventDefault(); skipNameEntry(); return; }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    e.stopPropagation();
+    commitLeaderboardEntry();
+    return;
+  }
+  if (e.key === 'Escape' || e.key === 'Esc') {
+    e.preventDefault();
+    e.stopPropagation();
+    skipNameEntry();
+    return;
+  }
   // Arrow keys must NOT skip anymore — stop them dead so they can't bubble to window
   if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
     e.stopPropagation();
